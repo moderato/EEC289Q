@@ -6,7 +6,7 @@ import os
 from scipy import signal
 from topi.util import get_const_tuple
 from tvm.contrib.pickle_memoize import memoize
-from fused_schedule import schedule_conv2d_nhwc, schedule_depthwise_conv2d_nhwc_reuse
+from depth_1by1_schedule import schedule_conv2d_nhwc, schedule_depthwise_conv2d_nhwc_reuse
 from tvm.contrib import nvcc
 
 TASK = "hhhh"
@@ -269,17 +269,17 @@ def verify_conv2d_nhwc(batch, in_channel, in_size, num_filter, kernel, stride, p
 
 def test_depthwise_conv2d():
     depthwise_conv2d_with_workload_nhwc(1, 32, 112, 1, 3, 1, "SAME") # 111.77us, 168.69us
-    # verify_conv2d_nhwc(1, 32, 112, 32, 1, 1, "SAME") # 53.023us
+    verify_conv2d_nhwc(1, 32, 112, 32, 1, 1, "SAME") # 53.023us
     # depthwise_1by1_fused(1, 32, 112, 1, 3, 1, "SAME", 64)
 
     depthwise_conv2d_with_workload_nhwc(1, 128, 56, 1, 3, 1, "SAME") # 116.77us, 78,03us
-    # verify_conv2d_nhwc(1, 128, 56, 128, 1, 1, "SAME") # 132.06us
+    verify_conv2d_nhwc(1, 128, 56, 128, 1, 1, "SAME") # 132.06us
 
     depthwise_conv2d_with_workload_nhwc(1, 256, 28, 1, 3, 1, "SAME") # 67.71us, 57.81us
-    # verify_conv2d_nhwc(1, 256, 28, 256, 1, 1, "SAME") # 134.21us
+    verify_conv2d_nhwc(1, 256, 28, 256, 1, 1, "SAME") # 134.21us
 
     depthwise_conv2d_with_workload_nhwc(1, 512, 14, 1, 3, 1, "SAME") # 24.83us, 30.21us
-    # verify_conv2d_nhwc(1, 512, 14, 512, 1, 1, "SAME") # 145.21us
+    verify_conv2d_nhwc(1, 512, 14, 512, 1, 1, "SAME") # 145.21us
 
 if __name__ == "__main__":
     test_depthwise_conv2d()

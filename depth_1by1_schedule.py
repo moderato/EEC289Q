@@ -293,7 +293,7 @@ def schedule_depthwise_conv2d_nhwc_reuse(A, outs):
         num_thread = tvm.ir_pass.Simplify(temp.shape[3]).value
 
         s[temp].compute_inline()
-        # AS = s.cache_read(temp, "shared", [DepthwiseConv2d])
+        AS = s.cache_read(temp, "shared", [DepthwiseConv2d])
         # if num_thread < 512:
         #     FS = s.cache_read(Filter, "shared", [DepthwiseConv2d])
 
@@ -308,30 +308,6 @@ def schedule_depthwise_conv2d_nhwc_reuse(A, outs):
         thread_x = tvm.thread_axis("threadIdx.x")
 
         b, h, w, c = s[Output].op.axis
-
-        
-
-        #######################
-        # xoc, xic = s[Output].split(c, factor=num_thread)
-        # s[Output].reorder(xoc, b, h, w, xic)
-        # xo, yo, _, _ = s[Output].tile(h, w, x_factor=2, y_factor=2)
-        # fused = s[Output].fuse(yo, xo)
-        # fused = s[Output].fuse(fused, b)
-        # fused = s[Output].fuse(fused, xoc)
-
-        # s[Output].bind(fused, block_x)
-        # s[Output].bind(xic, thread_x)
-
-        # if DepthwiseConv2d.op in s.outputs:
-        #     s[CL].compute_at(s[Output], xic)
-        # else:
-        #     s[DepthwiseConv2d].compute_at(s[Output], xic)
-
-        # _, _, ci, fi = s[FS].op.axis
-        # s[FS].compute_at(s[Output], fused)
-        # fused = s[FS].fuse(fi, ci)
-        # s[FS].bind(fused, thread_x)
-        ####################
 
         xoc, xic = s[Output].split(c, factor=num_thread)
         s[Output].reorder(xoc, b, h, w, xic)
@@ -348,11 +324,11 @@ def schedule_depthwise_conv2d_nhwc_reuse(A, outs):
         else:
             s[DepthwiseConv2d].compute_at(s[Output], xic)
 
-        # s[AS].compute_at(s[Output], fused)
-        # b, h, w, c = s[AS].op.axis
-        # s[AS].reorder(h, w, b, c)
-        # fused_as = s[AS].fuse(b, c)
-        # s[AS].bind(fused_as, thread_x)
+        s[AS].compute_at(s[Output], fused)
+        b, h, w, c = s[AS].op.axis
+        s[AS].reorder(h, w, b, c)
+        fused_as = s[AS].fuse(b, c)
+        s[AS].bind(fused_as, thread_x)
 
         # if num_thread < 512:
         #     _, _, ci, fi = s[FS].op.axis
