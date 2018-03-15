@@ -207,7 +207,7 @@ template <typename Dtype>
 __global__ void GPU1x1Conv(const Dtype* const in, const Dtype* const weight, Dtype* const out, int const height, int const width, int const channels, int const out_channels)
 {
 	const int blockSize = 256;
-	__shared__ Dtype s_in[blockSize];// channel/2
+	volatile __shared__ Dtype s_in[blockSize];// channel/2
 	unsigned int tid = threadIdx.x;
 	unsigned int startId = tid*width*height; // 1~256 slice
 	unsigned int stride = blockSize*width*height;
@@ -225,18 +225,35 @@ __global__ void GPU1x1Conv(const Dtype* const in, const Dtype* const weight, Dty
 		 if (tid < 64) { s_in[tid] += s_in[tid + 64]; } 
 		 __syncthreads(); 
 			if (tid < 32) {
-			s_in[tid] += s_in[tid + 32]; __syncthreads(); 
-			s_in[tid] += s_in[tid + 16]; __syncthreads(); 
-			s_in[tid] += s_in[tid + 8]; __syncthreads(); 
-			s_in[tid] += s_in[tid + 4]; __syncthreads(); 
-			s_in[tid] += s_in[tid + 2]; __syncthreads(); 
-			s_in[tid] += s_in[tid + 1]; __syncthreads(); 
+			s_in[tid] += s_in[tid + 32]; //__syncthreads(); 
+			s_in[tid] += s_in[tid + 16]; //__syncthreads(); 
+			s_in[tid] += s_in[tid + 8]; //__syncthreads(); 
+			s_in[tid] += s_in[tid + 4]; //__syncthreads(); 
+			s_in[tid] += s_in[tid + 2]; //__syncthreads(); 
+			s_in[tid] += s_in[tid + 1]; //__syncthreads(); 
 			}
 		if (tid == 0) out[oc*width*height+pos] = s_in[0];
 
 	}
 }
 
+template <typename Dtype>
+__global__ void GPU1x1Conv2(const Dtype* const in, const Dtype* const weight, Dtype* const out, int const height, int const width, int const channels, int const out_channels)
+{
+
+	__shared__ Dtype tmp_weight[512];// 14*14
+	unsigned int tid = threadIdx.x;
+	for(int i=tid; i<512;i+=192)
+	tmp_weight[i]=weight[channels*blockIdx.x+i];
+
+	__syncthreads();
+
+	float local_out=0;
+	for(int rc=0; rc< 512; rc++)
+		local_out+= in[tid+rc*width*height]*tmp_weight[rc];
+	out[blockIdx.x*width*height+tid]=local_out;
+
+}
 
 
 
@@ -335,7 +352,8 @@ int main(int argc, char* argv[])
 		
 		dim3 numBlocks(14,14,1);
 		
-		GPU1x1Conv<float><<<numBlocks,channels/2>>>(d_top1, d_weight1x1, d_saparable_out, height, width, channels, channels);
+		GPU1x1Conv2<float><<<512,196>>>(d_top1, d_weight1x1, d_saparable_out, height, width, channels, channels);
+		GPU1x1Conv2<float><<<512,196>>>(d_top1, d_weight1x1, d_saparable_out, height, width, channels, channels);
 
 		float *outc = new float[n];
 		cudaMemcpy(outc, d_saparable_out, n*sizeof(float), cudaMemcpyDeviceToHost);
