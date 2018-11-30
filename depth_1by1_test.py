@@ -463,25 +463,25 @@ def test_depthwise_conv2d():
     default_schedule = True
     # depthwise_conv2d_with_workload_nhwc(1, 32, 112, 1, 3, 1, default_schedule=default_schedule) # 51.62us,
     # depthwise_conv2d_with_workload_nhwc_auto(1, 32, 112, 1, 3, 1, default_schedule=default_schedule) # 51.05us,
-    verify_conv2d_nhwc(1, 32, 112, 32, 1, 1, default_schedule=default_schedule) # 53.023us
+    verify_conv2d_nhwc(1, 32, 112, 32, 1, 1, default_schedule=default_schedule) # 53.023us, cudnn 49.10us
     # verify_conv2d_nhwc_auto(1, 32, 112, 32, 1, 1, default_schedule=default_schedule) # 52.68us
 
 
     # depthwise_conv2d_with_workload_nhwc(1, 128, 56, 1, 3, 1, default_schedule=default_schedule) # 45.26us,
     # depthwise_conv2d_with_workload_nhwc_auto(1, 128, 56, 1, 3, 1, default_schedule=default_schedule) # 45.08us,
-    verify_conv2d_nhwc(1, 128, 56, 128, 1, 1, default_schedule=default_schedule) # 132.06us
+    verify_conv2d_nhwc(1, 128, 56, 128, 1, 1, default_schedule=default_schedule) # 132.06us, cudnn 70.42us
     # verify_conv2d_nhwc_auto(1, 128, 56, 128, 1, 1, default_schedule=default_schedule) # 133.17us
 
 
     # depthwise_conv2d_with_workload_nhwc(1, 256, 28, 1, 3, 1, default_schedule=default_schedule) # 24.70us,
     # depthwise_conv2d_with_workload_nhwc_auto(1, 256, 28, 1, 3, 1, default_schedule=default_schedule) # 24.63us,
-    verify_conv2d_nhwc(1, 256, 28, 256, 1, 1, default_schedule=default_schedule) # 134.21us
+    verify_conv2d_nhwc(1, 256, 28, 256, 1, 1, default_schedule=default_schedule) # 134.21us, cudnn 74.89us
     # verify_conv2d_nhwc_auto(1, 256, 28, 256, 1, 1, default_schedule=default_schedule) # 149.73us
 
 
     # depthwise_conv2d_with_workload_nhwc(1, 512, 14, 1, 3, 1, default_schedule=default_schedule) # 11.48us,
     # depthwise_conv2d_with_workload_nhwc_auto(1, 512, 14, 1, 3, 1, default_schedule=default_schedule) # 10.94us,
-    verify_conv2d_nhwc(1, 512, 14, 512, 1, 1, default_schedule=default_schedule) # 145.21us
+    verify_conv2d_nhwc(1, 512, 14, 512, 1, 1, default_schedule=default_schedule) # 145.21us, cudnn 90.64us
     # verify_conv2d_nhwc_auto(1, 512, 14, 512, 1, 1, default_schedule=default_schedule) # 145.21us
 
 if __name__ == "__main__":
