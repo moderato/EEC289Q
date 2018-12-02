@@ -211,7 +211,7 @@ def verify_depth_1by1_fused(batch, in_channel_depthwise, in_size, channel_multip
                 s = schedule_depth_1by1_fused_nhwc([Output])
         # print(tvm.lower(s, [Input, Filter_d, Filter_1, Output], simple_mode=True))
                 
-        func = tvm.build(s, [Input, Filter_d, Filter_1, Output], device, name=("Depthwise1by1Fused_%d_%d"%(Input.shape[1], Input.shape[2])))
+        func = tvm.build(s, [Input, Filter_d, Filter_1, Output], device, name=("Depthwise1by1Fused_%d_%d" % (Input.shape[1], Input.shape[2])))
         # func(a, w, b)
         timer_1 = func.time_evaluator(func.entry_name, ctx, number=100)
         tcost_1 = timer_1(input, filter_d, filter_1, output).mean

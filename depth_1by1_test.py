@@ -33,15 +33,37 @@ def depthwise_conv2d_with_workload_nhwc(batch, in_channel, in_size, channel_mult
     filter_channel = in_channel
     filter_width = filter_height = kernel
     stride_w = stride_h = stride
+
+    input_shape = (batch, in_channel, in_height, in_width) if default_schedule else (batch, in_height, in_width, in_channel)
+    filter_shape = (filter_channel, channel_multiplier, filter_height, filter_width) if default_schedule else (filter_height, filter_width, filter_channel, channel_multiplier)
+
     # placeholder
-    Input = tvm.placeholder((batch, in_height, in_width, in_channel), name='Input')
-    Filter = tvm.placeholder((filter_height, filter_width, filter_channel, channel_multiplier), name='Filter')
-    Scale = tvm.placeholder((in_channel * channel_multiplier,), name='Scale')
-    Shift = tvm.placeholder((in_channel * channel_multiplier,), name='Shift')
-    # declare
-    DepthwiseConv2d = topi.nn.depthwise_conv2d_nhwc(Input, Filter, stride=[stride_h, stride_w], padding=padding, dilation=1)
-    ScaleShift = topi.nn.scale_shift_nhwc(DepthwiseConv2d, Scale, Shift)
-    Relu = topi.nn.relu(ScaleShift)
+    Input = tvm.placeholder(input_shape, name='Input')
+    Filter = tvm.placeholder(filter_shape, name='Filter')
+    # Scale = tvm.placeholder((in_channel * channel_multiplier,), name='Scale')
+    # Shift = tvm.placeholder((in_channel * channel_multiplier,), name='Shift')
+
+    # Use memoize, pickle the test data for next time use.
+    # @memoize("topi.tests.test_topi_depthwise_conv2d.nhwc")
+    def get_ref_data():
+        input_np = np.random.uniform(size=input_shape).astype(dtype)
+        filter_np = np.random.uniform(size=filter_shape).astype(dtype)
+        # scale_np = np.random.uniform(size=scale_shape).astype(dtype)
+        # shift_np = np.random.uniform(size=shift_shape).astype(dtype)
+        # correctness with scipy
+        depthwise_conv2d_scipy = topi.testing.depthwise_conv2d_python_nchw(input_np, filter_np, stride=[stride_h, stride_w], padding=padding) if default_schedule else topi.testing.depthwise_conv2d_python_nhwc(
+            input_np, filter_np, stride=[stride_h, stride_w], padding=padding)
+        # scale_shift_scipy = np.zeros(shape=scale_shift_shape)
+        # for c in range(in_channel * channel_multiplier):
+        #     scale_shift_scipy[:,:,:,c] = depthwise_conv2d_scipy[:,:,:,c] * scale_np[c] + shift_np[c]
+        #     relu_scipy = np.maximum(scale_shift_scipy, 0)
+        # return (input_np, filter_np, scale_np, shift_np,
+        #         depthwise_conv2d_scipy, scale_shift_scipy, relu_scipy)
+        return input_np, filter_np, depthwise_conv2d_scipy
+    # Get the test data
+    # (input_np, filter_np, scale_np, shift_np,
+    #  depthwise_conv2d_scipy, scale_shift_scipy, relu_scipy) = get_ref_data()
+    input_np, filter_np, depthwise_conv2d_scipy = get_ref_data()
 
     # schedule
     def check_device(device):
@@ -49,16 +71,23 @@ def depthwise_conv2d_with_workload_nhwc(batch, in_channel, in_size, channel_mult
         if not ctx.exist:
             print("Skip because %s is not enabled" % device)
             return
+        if default_schedule:
+            device += " -libs=cudnn"
         print("Running on target: %s" % device)
 
         with tvm.target.create(device):
-            s1 = schedule_depthwise_conv2d_nhwc_reuse([DepthwiseConv2d], Input)
+            # declare
+            DepthwiseConv2d = topi.cuda.depthwise_conv2d.depthwise_conv2d_cuda(autotvm.get_config(), Input, Filter, (stride_w, stride_h), (1, 1), dilation=1) if default_schedule else topi.nn.depthwise_conv2d_nhwc(Input, Filter, stride=[stride_h, stride_w], padding=padding, dilation=1)
+            # ScaleShift = topi.nn.scale_shift_nhwc(DepthwiseConv2d, Scale, Shift)
+            # Relu = topi.nn.relu(ScaleShift)
+
+            s1 = topi.cuda.depthwise_conv2d.schedule_depthwise_conv2d_nchw_cuda(autotvm.get_config(), [DepthwiseConv2d]) if default_schedule else schedule_depthwise_conv2d_nhwc_reuse([DepthwiseConv2d], Input)
             # s1 = topi.generic.schedule_depthwise_conv2d_nhwc(DepthwiseConv2d)
             # s2 = topi.generic.schedule_depthwise_conv2d_nhwc(ScaleShift)
             # s3 = topi.generic.schedule_depthwise_conv2d_nhwc(Relu)
             # s3 = schedule_depthwise_conv2d_nhwc_reuse(Relu)
         # build the kernels
-        f1 = tvm.build(s1, [Input, Filter, DepthwiseConv2d], device, name="ddd%dddd"%in_width)
+        f1 = tvm.build(s1, [Input, Filter, DepthwiseConv2d], device, name="DepthwiseConv2d_%d_%d" % (in_height, in_width))
         # f2 = tvm.build(s2, [Input, Filter, Scale, Shift, ScaleShift], device)
         # f3 = tvm.build(s3, [Input, Filter, Scale, Shift, Relu], device)
 
@@ -66,38 +95,18 @@ def depthwise_conv2d_with_workload_nhwc(batch, in_channel, in_size, channel_mult
         dtype = Input.dtype
         input_shape = get_const_tuple(Input.shape)
         filter_shape = get_const_tuple(Filter.shape)
-        scale_shape = get_const_tuple(Scale.shape)
-        shift_shape = get_const_tuple(Shift.shape)
-        scale_shift_shape = get_const_tuple(ScaleShift.shape)
-
-        # Use memoize, pickle the test data for next time use.
-        # @memoize("topi.tests.test_topi_depthwise_conv2d.nhwc")
-        def get_ref_data():
-            input_np = np.random.uniform(size=input_shape).astype(dtype)
-            filter_np = np.random.uniform(size=filter_shape).astype(dtype)
-            scale_np = np.random.uniform(size=scale_shape).astype(dtype)
-            shift_np = np.random.uniform(size=shift_shape).astype(dtype)
-            # correctness with scipy
-            depthwise_conv2d_scipy = topi.testing.depthwise_conv2d_python_nhwc(
-                input_np, filter_np, stride=[stride_h, stride_w], padding=padding)
-            scale_shift_scipy = np.zeros(shape=scale_shift_shape)
-            for c in range(in_channel * channel_multiplier):
-                scale_shift_scipy[:,:,:,c] = depthwise_conv2d_scipy[:,:,:,c] * scale_np[c] + shift_np[c]
-                relu_scipy = np.maximum(scale_shift_scipy, 0)
-            return (input_np, filter_np, scale_np, shift_np,
-                    depthwise_conv2d_scipy, scale_shift_scipy, relu_scipy)
-        # Get the test data
-        (input_np, filter_np, scale_np, shift_np,
-         depthwise_conv2d_scipy, scale_shift_scipy, relu_scipy) = get_ref_data()
+        # scale_shape = get_const_tuple(Scale.shape)
+        # shift_shape = get_const_tuple(Shift.shape)
+        # scale_shift_shape = get_const_tuple(ScaleShift.shape)
 
         # prepare data
         input_tvm = tvm.nd.array(input_np, ctx)
         filter_tvm = tvm.nd.array(filter_np, ctx)
-        scale_tvm = tvm.nd.array(scale_np, ctx)
-        shift_tvm = tvm.nd.array(shift_np, ctx)
-        depthwise_conv2d_tvm = tvm.nd.array(np.zeros(shape=get_const_tuple(DepthwiseConv2d.shape), dtype=DepthwiseConv2d.dtype), ctx)
-        scale_shift_tvm = tvm.nd.array(np.zeros(shape=get_const_tuple(ScaleShift.shape), dtype=ScaleShift.dtype), ctx)
-        relu_tvm = tvm.nd.array(np.zeros(shape=get_const_tuple(Relu.shape), dtype=Relu.dtype), ctx)
+        # scale_tvm = tvm.nd.array(scale_np, ctx)
+        # shift_tvm = tvm.nd.array(shift_np, ctx)
+        depthwise_conv2d_tvm = tvm.nd.array(np.zeros(shape=get_const_tuple(DepthwiseConv2d.shape), dtype=dtype), ctx)
+        # scale_shift_tvm = tvm.nd.array(np.zeros(shape=get_const_tuple(ScaleShift.shape), dtype=dtype), ctx)
+        # relu_tvm = tvm.nd.array(np.zeros(shape=get_const_tuple(Relu.shape), dtype=dtype), ctx)
         # launch kernel 1 (depthwise_conv2d)
         timer_1 = f1.time_evaluator(f1.entry_name, ctx, number=1000)
         tcost_1 = timer_1(input_tvm, filter_tvm, depthwise_conv2d_tvm).mean
@@ -210,7 +219,7 @@ def depthwise_conv2d_with_workload_nhwc_auto(batch, in_channel, in_size, channel
 
     check_device("cuda")
 
-def verify_conv2d_nhwc(batch, in_channel, in_size, num_filter, kernel, stride, padding="SAME", dtype="float32", default_schedule=False):
+def conv2d_nhwc(batch, in_channel, in_size, num_filter, kernel, stride, padding="SAME", dtype="float32", default_schedule=False):
     in_height = in_width = in_size
 
     a_shape = (batch, in_channel, in_height, in_width) if default_schedule else (batch, in_height, in_width, in_channel) # NCHW for cudnn, NHWC for others
@@ -246,7 +255,7 @@ def verify_conv2d_nhwc(batch, in_channel, in_size, num_filter, kernel, stride, p
         w = tvm.nd.array(w_np, ctx)
         b = tvm.nd.array(np.zeros(get_const_tuple(B.shape), dtype=B.dtype), ctx)
                 
-        func = tvm.build(s, [A, W, B], device, name=("ddd%dddd"%a.shape[2]))
+        func = tvm.build(s, [A, W, B], device, name=("Conv2d_%d_%d" % (in_height, in_width)))
         # func(a, w, b)
         timer_1 = func.time_evaluator(func.entry_name, ctx, number=1000)
         tcost_1 = timer_1(a, w, b).mean
@@ -256,7 +265,7 @@ def verify_conv2d_nhwc(batch, in_channel, in_size, num_filter, kernel, stride, p
     for device in ["cuda"]:
         check_device(device)
 
-def verify_conv2d_nhwc_auto(batch, in_channel, in_size, num_filter, kernel, stride, padding="SAME", dtype="float32", default_schedule=False):
+def conv2d_nhwc_auto(batch, in_channel, in_size, num_filter, kernel, stride, padding="SAME", dtype="float32", default_schedule=False):
     in_height = in_width = in_size
 
     a_shape = (batch, in_height, in_width, in_channel)
@@ -461,28 +470,28 @@ def test_depthwise_conv2d():
     # depthwise_1by1_fused(1, 32, 112, 1, 3, 1, 32, layout="NCHW")
 
     default_schedule = True
-    # depthwise_conv2d_with_workload_nhwc(1, 32, 112, 1, 3, 1, default_schedule=default_schedule) # 51.62us,
+    depthwise_conv2d_with_workload_nhwc(1, 32, 112, 1, 3, 1, default_schedule=default_schedule) # 51.62us, cudnn 93.53us
     # depthwise_conv2d_with_workload_nhwc_auto(1, 32, 112, 1, 3, 1, default_schedule=default_schedule) # 51.05us,
-    verify_conv2d_nhwc(1, 32, 112, 32, 1, 1, default_schedule=default_schedule) # 53.023us, cudnn 49.10us
-    # verify_conv2d_nhwc_auto(1, 32, 112, 32, 1, 1, default_schedule=default_schedule) # 52.68us
+    # conv2d_nhwc(1, 32, 112, 32, 1, 1, default_schedule=default_schedule) # 53.023us, cudnn 49.10us
+    # conv2d_nhwc_auto(1, 32, 112, 32, 1, 1, default_schedule=default_schedule) # 52.68us
 
 
-    # depthwise_conv2d_with_workload_nhwc(1, 128, 56, 1, 3, 1, default_schedule=default_schedule) # 45.26us,
+    # depthwise_conv2d_with_workload_nhwc(1, 128, 56, 1, 3, 1, default_schedule=default_schedule) # 45.26us, cudnn 61.90us
     # depthwise_conv2d_with_workload_nhwc_auto(1, 128, 56, 1, 3, 1, default_schedule=default_schedule) # 45.08us,
-    verify_conv2d_nhwc(1, 128, 56, 128, 1, 1, default_schedule=default_schedule) # 132.06us, cudnn 70.42us
-    # verify_conv2d_nhwc_auto(1, 128, 56, 128, 1, 1, default_schedule=default_schedule) # 133.17us
+    # conv2d_nhwc(1, 128, 56, 128, 1, 1, default_schedule=default_schedule) # 132.06us, cudnn 70.42us
+    # conv2d_nhwc_auto(1, 128, 56, 128, 1, 1, default_schedule=default_schedule) # 133.17us
 
 
-    # depthwise_conv2d_with_workload_nhwc(1, 256, 28, 1, 3, 1, default_schedule=default_schedule) # 24.70us,
+    # depthwise_conv2d_with_workload_nhwc(1, 256, 28, 1, 3, 1, default_schedule=default_schedule) # 24.70us, cudnn 44.10us
     # depthwise_conv2d_with_workload_nhwc_auto(1, 256, 28, 1, 3, 1, default_schedule=default_schedule) # 24.63us,
-    verify_conv2d_nhwc(1, 256, 28, 256, 1, 1, default_schedule=default_schedule) # 134.21us, cudnn 74.89us
-    # verify_conv2d_nhwc_auto(1, 256, 28, 256, 1, 1, default_schedule=default_schedule) # 149.73us
+    # conv2d_nhwc(1, 256, 28, 256, 1, 1, default_schedule=default_schedule) # 134.21us, cudnn 74.89us
+    # conv2d_nhwc_auto(1, 256, 28, 256, 1, 1, default_schedule=default_schedule) # 149.73us
 
 
-    # depthwise_conv2d_with_workload_nhwc(1, 512, 14, 1, 3, 1, default_schedule=default_schedule) # 11.48us,
+    # depthwise_conv2d_with_workload_nhwc(1, 512, 14, 1, 3, 1, default_schedule=default_schedule) # 11.48us, cudnn 25.23us
     # depthwise_conv2d_with_workload_nhwc_auto(1, 512, 14, 1, 3, 1, default_schedule=default_schedule) # 10.94us,
-    verify_conv2d_nhwc(1, 512, 14, 512, 1, 1, default_schedule=default_schedule) # 145.21us, cudnn 90.64us
-    # verify_conv2d_nhwc_auto(1, 512, 14, 512, 1, 1, default_schedule=default_schedule) # 145.21us
+    # conv2d_nhwc(1, 512, 14, 512, 1, 1, default_schedule=default_schedule) # 145.21us, cudnn 90.64us
+    # conv2d_nhwc_auto(1, 512, 14, 512, 1, 1, default_schedule=default_schedule) # 145.21us
 
 if __name__ == "__main__":
     test_depthwise_conv2d()
