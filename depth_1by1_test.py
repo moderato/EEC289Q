@@ -34,8 +34,8 @@ def depthwise_conv2d_with_workload_nhwc(batch, in_channel, in_size, channel_mult
     filter_width = filter_height = kernel
     stride_w = stride_h = stride
 
-    input_shape = (batch, in_channel, in_height, in_width) if default_schedule else (batch, in_height, in_width, in_channel)
-    filter_shape = (filter_channel, channel_multiplier, filter_height, filter_width) if default_schedule else (filter_height, filter_width, filter_channel, channel_multiplier)
+    input_shape = (batch, in_channel, in_height, in_width) if default_schedule else (batch, in_height, in_width, in_channel) # in_channel = intermediate_out_channel = group_count
+    filter_shape = (filter_channel, channel_multiplier, filter_height, filter_width) if default_schedule else (filter_height, filter_width, filter_channel, channel_multiplier) # channel_multipler = 1
 
     # placeholder
     Input = tvm.placeholder(input_shape, name='Input')
@@ -470,9 +470,9 @@ def test_depthwise_conv2d():
     # depthwise_1by1_fused(1, 32, 112, 1, 3, 1, 32, layout="NCHW")
 
     default_schedule = True
-    depthwise_conv2d_with_workload_nhwc(1, 32, 112, 1, 3, 1, default_schedule=default_schedule) # 51.62us, cudnn 93.53us
+    # depthwise_conv2d_with_workload_nhwc(1, 32, 112, 1, 3, 1, default_schedule=default_schedule) # 51.62us, cudnn 93.53us
     # depthwise_conv2d_with_workload_nhwc_auto(1, 32, 112, 1, 3, 1, default_schedule=default_schedule) # 51.05us,
-    # conv2d_nhwc(1, 32, 112, 32, 1, 1, default_schedule=default_schedule) # 53.023us, cudnn 49.10us
+    conv2d_nhwc(1, 32, 112, 32, 1, 1, default_schedule=default_schedule) # 53.023us, cudnn 49.10us
     # conv2d_nhwc_auto(1, 32, 112, 32, 1, 1, default_schedule=default_schedule) # 52.68us
 
 

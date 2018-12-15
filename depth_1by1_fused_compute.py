@@ -24,8 +24,8 @@ def depth_1by1_fused(   Input,
                     or [filter_height, filter_width, in_channel, in_channel * channel_multiplier]
 
     Filter_1 : tvm.Tensor
-        4-D with shape [out_channel, in_channel * channel_multiplier, filter_height, filter_width]
-                    or [filter_height, filter_width, out_channel, in_channel * channel_multiplier]
+        4-D with shape [out_channel, in_channel * channel_multiplier, 0, 0]
+                    or [0, 0, out_channel, in_channel * channel_multiplier]
 
     stride_d : tuple of two ints
         The spatial stride along height and width

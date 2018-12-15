@@ -245,7 +245,6 @@ def register_fused(outs, auto_inline=False):
 #         # s[BL].compute_at(s[Out], ci)
 
 #         # wi = s[Out].fuse(hi, wi)
-#         # # wi = s[Out].fuse(ni, wi)
 
 #         # s[Out].bind(wi, block_x)
 #         # s[Out].bind(ci, thread_x)
@@ -715,8 +714,8 @@ def schedule_conv2d_nhwc_auto(batch, in_channel, in_size, num_filter, kernel, st
     sch[Out].bind(ci, thread_x)
 
     sch[BL].compute_at(sch[Out], ci)
+    
     sch[AA].compute_at(sch[Out], ci)
-
     ni, hi, wi, ci = sch[AA].op.axis
     sch[AA].bind(ci, thread_x)
 
