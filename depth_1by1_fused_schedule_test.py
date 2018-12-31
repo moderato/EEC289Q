@@ -45,108 +45,134 @@ def schedule_depth_1by1_fused_nhwc(outs):
     outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
     s = tvm.create_schedule([x.op for x in outs])
     def _schedule(Padded, F_d, F_1, Out):
-        # s[In].compute_inline()
+        ####################### ~3000us 
+        s[In].compute_inline()
 
-        # num_thread = 256
-        # block_x = tvm.thread_axis("blockIdx.x")
-        # thread_x = tvm.thread_axis((0, num_thread), "threadIdx.x")
-
-        # ni, hi, wi, ci = s[Out].op.axis
-        # wi = s[Out].fuse(hi, wi)
-        # s[Out].bind(wi, block_x)
-        # s[Out].bind(ci, thread_x)
-
-        s[Padded].compute_inline()
-
-        if Out.op in s.outputs:
-            Output = Out
-            OL = s.cache_write(Out, "local")
-        else:
-            Output = outs[0].op.output(0)
-            s[Out].set_scope("local")
-
-        IS = s.cache_read(Padded, "shared", [OL])
-        FS_d = s.cache_read(F_d, "shared", [OL])
-        # FS_1 = s.cache_read(F_1, "shared", [OL])
-
-        in_channel = tvm.ir_pass.Simplify(Padded.shape[3]).value
-        num_thread = in_channel
-        multiples = 1
-        # # multiples
-        # while num_thread < 1024 and multiples <= 4:
-        #     num_thread *= 2
-        #     multiples *= 2
-
+        num_thread = 256
         block_x = tvm.thread_axis("blockIdx.x")
-        thread_x = tvm.thread_axis((0, in_channel), "threadIdx.x")
-        if multiples != 1:
-            thread_y = tvm.thread_axis((0, multiples), "threadIdx.y")
+        thread_x = tvm.thread_axis((0, num_thread), "threadIdx.x")
 
-        # Output tiling
-        n, h, w, c = s[Output].op.axis
-        xoc, xic = s[Output].split(c, factor=num_thread)
-        # _, _, cc = s[Out].op.reduce_axis
-        # xocc, xicc = s[Out].split(cc, factor=16)
-        # cl = s.rfactor(Out, xicc)
-        s[Output].reorder(xoc, n, h, w, xic)
-        yo, xo, b, a = s[Output].tile(h, w, x_factor=2, y_factor=2)
-        fused = s[Output].fuse(yo, xo)
-        fused = s[Output].fuse(n, fused)
-        fused = s[Output].fuse(xoc, fused)
-        s[Output].bind(fused, block_x)
-        s[Output].bind(xic, thread_x)
-        if Out.op in s.outputs:
-            s[OL].compute_at(s[Output], xic)
-        else:
-            s[Out].compute_at(s[Output], xic)
+        ni, hi, wi, ci = s[Out].op.axis
+        wi = s[Out].fuse(hi, wi)
+        s[Out].bind(wi, block_x)
+        s[Out].bind(ci, thread_x)
 
-        # n, h, w, c = s[Output].op.axis
-        # yo, xo, b, a = s[Output].tile(h, w, x_factor=2, y_factor=2)
-        # if multiples != 1:
-        #     x2, x1 = s[Output].split(xo, factor=multiples)
-        #     fused = s[Output].fuse(yo, x2)
-        #     fused = s[Output].fuse(n, fused)
-        #     s[Output].reorder(fused, b, a, x1, c)
-        #     s[Output].bind(x1, thread_y)
-        # else:
-        #     fused = s[Output].fuse(yo, xo)
-        #     fused = s[Output].fuse(n, fused)
-        # s[Output].bind(fused, block_x)
-        # s[Output].bind(c, thread_x)
+        ####################### ~407us
+
+        # s[Padded].compute_inline()
+
         # if Out.op in s.outputs:
-        #     s[OL].compute_at(s[Output], c)
+        #     Output = Out
+        #     OL = s.cache_write(Out, "local")
         # else:
-        #     s[Out].compute_at(s[Output], c)
+        #     Output = outs[0].op.output(0)
+        #     s[Out].set_scope("local")
 
-        # # Input reuse
-        s[IS].compute_at(s[Output], fused)
-        n, h, w, c = s[IS].op.axis
-        s[IS].reorder(h, w, n, c)
-        fused_is = s[IS].fuse(n, c)
-        s[IS].bind(fused_is, thread_x)
-        # # multiples
-        # w2, w1 = s[IS].split(w, factor=multiples)
-        # s[IS].bind(w1, thread_y)
+        # IS = s.cache_read(Padded, "shared", [OL])
+        # FS_d = s.cache_read(F_d, "shared", [OL])
+        # # FS_1 = s.cache_read(F_1, "shared", [OL])
 
-        # Filter_d reuse
-        s[FS_d].compute_at(s[Output], fused) # Necessary!!
-        fy, fx, c, f = s[FS_d].op.axis
-        fused_fs_d = s[FS_d].fuse(c, f)
-        s[FS_d].bind(fused_fs_d, thread_x)
+        # in_channel = tvm.ir_pass.Simplify(Padded.shape[3]).value
+        # num_thread = in_channel
+        # multiples = 1
+        # # # multiples
+        # # while num_thread < 1024 and multiples <= 4:
+        # #     num_thread *= 2
+        # #     multiples *= 2
 
-        # # Filter_1 reuse
-        # s[FS_1].compute_at(s[Output], fused)
-        # h, w, o, i = s[FS_1].op.axis
-        # s[FS_1].reorder(h, w, i, o)
-        # s[FS_1].bind(i, thread_x)
+        # block_x = tvm.thread_axis("blockIdx.x")
+        # thread_x = tvm.thread_axis((0, in_channel), "threadIdx.x")
+        # if multiples != 1:
+        #     thread_y = tvm.thread_axis((0, multiples), "threadIdx.y")
 
+        # # Output tiling
+        # n, h, w, c = s[Output].op.axis
+        # xoc, xic = s[Output].split(c, factor=num_thread)
+        # # _, _, cc = s[Out].op.reduce_axis
+        # # xocc, xicc = s[Out].split(cc, factor=16)
+        # # cl = s.rfactor(Out, xicc)
+        # s[Output].reorder(xoc, n, h, w, xic)
+        # yo, xo, b, a = s[Output].tile(h, w, x_factor=2, y_factor=2)
+        # fused = s[Output].fuse(yo, xo)
+        # fused = s[Output].fuse(n, fused)
+        # fused = s[Output].fuse(xoc, fused)
+        # s[Output].bind(fused, block_x)
+        # s[Output].bind(xic, thread_x)
+        # if Out.op in s.outputs:
+        #     s[OL].compute_at(s[Output], xic)
+        # else:
+        #     s[Out].compute_at(s[Output], xic)
 
-        # 1 SM multiple warps: hide latency
-        # Don't use too much registers in one thread (limiting the number of threads/warps on 1 SM and resulting in worse latency hiding)
-        # Increase occupancy
+        # # # Input reuse
+        # s[IS].compute_at(s[Output], fused)
+        # n, h, w, c = s[IS].op.axis
+        # s[IS].reorder(h, w, n, c)
+        # fused_is = s[IS].fuse(n, c)
+        # s[IS].bind(fused_is, thread_x)
+        # # # multiples
+        # # w2, w1 = s[IS].split(w, factor=multiples)
+        # # s[IS].bind(w1, thread_y)
+
+        # # Filter_d reuse
+        # s[FS_d].compute_at(s[Output], fused) # Necessary!!
+        # fy, fx, c, f = s[FS_d].op.axis
+        # fused_fs_d = s[FS_d].fuse(c, f)
+        # s[FS_d].bind(fused_fs_d, thread_x)
+
+        # # # Filter_1 reuse
+        # # s[FS_1].compute_at(s[Output], fused)
+        # # h, w, o, i = s[FS_1].op.axis
+        # # s[FS_1].reorder(h, w, i, o)
+        # # s[FS_1].bind(i, thread_x)
+
+        # # 1 SM multiple warps: hide latency
+        # # Don't use too much registers in one thread (limiting the number of threads/warps on 1 SM and resulting in worse latency hiding)
+        # # Increase occupancy
+
+        #######################
+
+        # s[Padded].compute_inline()
+
+        # FS_d = s.cache_read(F_d, "shared", [Out])
+
+        # per_thread = 8
+        # in_channel = tvm.ir_pass.Simplify(Padded.shape[3]).value
+        # num_thread = int(in_channel / per_thread)
+        # block_x = tvm.thread_axis("blockIdx.x")
+        # # thread_x = tvm.thread_axis((0, num_thread), "threadIdx.x")
+        # thread_x = tvm.thread_axis("threadIdx.x")
+        # thread_y = tvm.thread_axis("threadIdx.y")
+
+        # # Output tiling
+        # # n, h, w, c = s[Output].op.axis
+        # # xoc, xic = s[Output].split(c, factor=num_thread)
+        # # s[Output].reorder(xoc, n, h, w, xic)
+        # # yo, xo, b, a = s[Output].tile(h, w, x_factor=2, y_factor=2)
+        # # fused = s[Output].fuse(yo, xo)
+        # # fused = s[Output].fuse(n, fused)
+        # # fused = s[Output].fuse(xoc, fused)
+        # # s[Output].bind(fused, block_x)
+        # # s[Output].bind(xic, thread_x)
+        # _, _, r = s[Out].op.reduce_axis
+        # ro, ri = s[Out].split(r, factor=per_thread)
+        # RF = s.rfactor(Out, ri)
+
+        # n, h, w, c = s[Out].op.axis
+        # co, ci = s[Out].split(c, factor=32)
+        # s[Out].bind(co, block_x)
+        # s[Out].bind(ci, thread_y)
+        # s[Out].bind(s[Out].op.reduce_axis[0], thread_x)
+        # s[RF].compute_at(s[Out], s[Out].op.reduce_axis[0])
+        # # s[Out].set_store_predicate(thread_x.var.equal(0))
+
+        # # Filter_d reuse
+        # s[FS_d].compute_at(s[Out], co) # Necessary!!
+        # # fy, fx, c, f = s[FS_d].op.axis
+        # # fused_fs_d = s[FS_d].fuse(c, f)
+        # # s[FS_d].bind(fused_fs_d, thread_x)
+
+        #######################
         
-
-
     def traverse(OP):
         print("***********")
         print(OP.tag)
@@ -357,11 +383,11 @@ def verify_depth_1by1_fused(batch, in_channel_depthwise, in_size, channel_multip
                 s = schedule_depth_1by1_fused_nchw([Output])
             else:
                 s = schedule_depth_1by1_fused_nhwc([Output])
-        # print(tvm.lower(s, [Input, Filter_d, Filter_1, Output], simple_mode=True))
+        print(tvm.lower(s, [Input, Filter_d, Filter_1, Output], simple_mode=True))
                 
         func = tvm.build(s, [Input, Filter_d, Filter_1, Output], device, name=("Depthwise1by1Fused_%d_%d" % (Input.shape[1], Input.shape[2])))
         # func(a, w, b)
-        timer_1 = func.time_evaluator(func.entry_name, ctx, number=1000)
+        timer_1 = func.time_evaluator(func.entry_name, ctx, number=10)
         tcost_1 = timer_1(input, filter_d, filter_1, output).mean
         np.testing.assert_allclose(output.asnumpy(), output_np, rtol=1e-5)
         print("Depthwise & 1by1 Fused ({}): average running time is {:.2f} us.".format(layout, tcost_1 * 1e6))
@@ -370,8 +396,8 @@ def verify_depth_1by1_fused(batch, in_channel_depthwise, in_size, channel_multip
         check_device(device)
 
 if __name__ == "__main__":
-    # verify_depth_1by1_fused(1, 32, 112, 1, 3, 1, 32, layout="NHWC")
-    verify_depth_1by1_fused(1, 128, 56, 1, 3, 1, 128, layout="NHWC")
+    verify_depth_1by1_fused(1, 32, 112, 1, 3, 1, 32, layout="NHWC")
+    # verify_depth_1by1_fused(1, 128, 56, 1, 3, 1, 128, layout="NHWC")
     # verify_depth_1by1_fused(1, 256, 28, 1, 3, 1, 256, layout="NHWC")
     # verify_depth_1by1_fused(1, 512, 14, 1, 3, 1, 512, layout="NHWC")
     # verify_depth_1by1_fused(1, 32, 112, 1, 3, 1, 32, layout="NCHW")
