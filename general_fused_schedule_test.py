@@ -158,110 +158,223 @@ def schedule_general_fused_nhwc(outs, nodes, params):
     # # fused = s[FS_d].fuse(fi, ci)
     # # s[FS_d].bind(fused, thread_x)
 
-    # #################################
+    # # #################################
+    # PaddedInput = nodes[1]
+    # Intermediate = nodes[2]
+    # Out = nodes[3]
+    # F_d = params[1]
+    # F_1 = params[2]
+
+    # num_channel = tvm.ir_pass.Simplify(PaddedInput.shape[3]).value
+    # num_thread = num_channel if num_channel <= 64 else int(num_channel / 4)
+    # output_num_per_block = 8
+
+    # Padded = s.cache_read(PaddedInput, "shared", [Intermediate])
+    # s[PaddedInput].compute_inline()
+    # FS_d = s.cache_read(F_d, "shared", [Intermediate])
+    # FS_1 = s.cache_read(F_1, "shared", [Out])
+    # # FL_d = s.cache_read(FS_d, "local", [Intermediate])
+    # # FL_1 = s.cache_read(FS_1, "local", [Out])
+
+    # # Output
+    # Output = Out
+    # OL = s.cache_write(Out, "shared")
+    # # Intermediate output
+    # IS = Intermediate
+    # s[Intermediate].set_scope("shared")
+
+    # block_x = tvm.thread_axis("blockIdx.x")
+    # thread_x = tvm.thread_axis("threadIdx.x")
+    # thread_y = tvm.thread_axis("threadIdx.y")
+    # # thread_z = tvm.thread_axis("threadIdx.z")
+
+    # # *.local.rf = CTR
+    # # *.local = OL
+    # # * = Output
+
+    # # OL: 1 14 14 512, 512; Output: 1 14 14 512, na
+    # # Final output
+    # cc = s[OL].op.reduce_axis[0]
+    # xocc, xicc = s[OL].split(cc, factor=num_thread)
+    # CTR = s.rfactor(OL, xocc) # Cross thread reduction
+    # # OL: 1 14 14 512, 4; Output: 1 14 14 512, na
+    
+    # n, h, w, c = s[Output].op.axis
+    # xoc, xic = s[Output].split(c, factor=output_num_per_block)
+    # s[Output].reorder(xoc, n, h, w, xic)
+    # yo, xo, yi, xi = s[Output].tile(h, w, x_factor=2, y_factor=2)
+    # fused = s[Output].fuse(yo, xo)
+    # # fused = s[Output].fuse(h, w)
+    # fused = s[Output].fuse(fused, n)
+    # fused = s[Output].fuse(fused, xoc)
+    # s[Output].bind(fused, block_x)
+
+    # n, h, w, col = s[OL].op.axis
+    # rc = s[OL].op.reduce_axis[0]
+    # s[OL].reorder(rc, n, h, w, col)
+    # s[CTR].bind(s[CTR].op.reduce_axis[0], thread_x)
+    # s[CTR].compute_at(s[OL], s[OL].op.axis[-1])
+    # # s[OL].bind(s[OL].op.reduce_axis[0], thread_x)
+    # s[OL].compute_at(s[Output], fused)
+
+    # # # Intermediate
+    # n, h, w, c = s[IS].op.axis
+    # co, ci = s[IS].split(c, factor=num_thread)
+    # yo, xo, yi, xi = s[IS].tile(h, w, x_factor=2, y_factor=2)
+    # s[IS].reorder(co, n, yo, xo, yi, xi, ci)
+    # fused_i = s[IS].fuse(yi, xi)
+    # s[IS].bind(ci, thread_x)
+    # s[IS].bind(fused_i, thread_y)
+    # s[IS].compute_at(s[OL], rc)
+
+    # # Shared Input
+    # s[Padded].compute_at(s[IS], fused_i)
+    # n, h, w, c = s[Padded].op.axis
+    # co, ci = s[Padded].split(c, factor=num_thread)
+    # s[Padded].reorder(co, n, h, w, ci)
+    # s[Padded].bind(ci, thread_x)
+    # # s[Padded].bind(w, thread_y)
+
+    # # Shared depthwise filter
+    # s[FS_d].compute_at(s[OL], rc)
+    # hd, wd, id, od = s[FS_d].op.axis
+    # fused_f = s[FS_d].fuse(id, od)
+    # s[FS_d].bind(fused_f, thread_x)
+    # # s[FS_d].bind(wd, thread_y)
+    # # s[FS_d].bind(hd, thread_z)
+    # # s[FS_d].unroll(h)
+    # # s[FS_d].unroll(w)
+
+    # # Shared 1by1 filter
+    # s[FS_1].compute_at(s[OL], rc)
+    # # h1, w1, i1, o1 = s[F1_d].op.axis
+    # # if output_num_per_block >= num_thread:
+    # #     o11, o12 = s[F1_d].split(o1, factor=num_thread)
+    # #     s[F1_d].bind(o12, thread_x)
+    # # else:
+    # #     x = int(num_thread / output_num_per_block)
+    # #     i11, i12 = s[F1_d].split(i1, factor=x)
+    # #     fused_1 = s[F1_d].fuse(i12, o1)
+    # #     s[F1_d].bind(fused_1, thread_x)
+    # h1, w1, o1, i1 = s[FS_1].op.axis
+    # i11, i12 = s[FS_1].split(i1, factor=num_thread)
+    # s[FS_1].bind(i12, thread_x)
+    # # s[FL_1].compute_at(s[OL], col)
+
+    # s[CTR].set_store_predicate(thread_x.var.equal(0))
+    # s[OL].set_store_predicate(thread_x.var.equal(0))
+    # s[Output].set_store_predicate(thread_x.var.equal(0))
+
+    #######################
     PaddedInput = nodes[1]
     Intermediate = nodes[2]
     Out = nodes[3]
     F_d = params[1]
     F_1 = params[2]
 
-    num_channel = tvm.ir_pass.Simplify(PaddedInput.shape[3]).value
-    num_thread = num_channel if num_channel <= 64 else int(num_channel / 4)
-    output_num_per_block = 8
+    # num_channel = tvm.ir_pass.Simplify(PaddedInput.shape[3]).value
+    # num_thread = num_channel if num_channel <= 64 else int(num_channel / 4)
+    # 
+    # num_thread = tvm.ir_pass.Simplify(PaddedInput.shape[3]).value
+    # 
+    input_num_per_tile = 4
+    num_thread_x = 32
+    num_thread_y = input_num_per_tile * input_num_per_tile
+    output_num_per_block = 64
 
-    Padded = s.cache_read(PaddedInput, "shared", [Intermediate])
+    # Padded = s.cache_read(PaddedInput, "shared", [Intermediate])
     s[PaddedInput].compute_inline()
-    FS_d = s.cache_read(F_d, "shared", [Intermediate])
-    FS_1 = s.cache_read(F_1, "shared", [Out])
+    # FS_d = s.cache_read(F_d, "shared", [Intermediate])
+    # FS_1 = s.cache_read(F_1, "shared", [Out])
     # FL_d = s.cache_read(FS_d, "local", [Intermediate])
     # FL_1 = s.cache_read(FS_1, "local", [Out])
 
-    # Output
-    Output = Out
-    OL = s.cache_write(Out, "shared")
+    # # Output
+    # Output = Out
+    # OL = s.cache_write(Out, "shared")
     # Intermediate output
     IS = Intermediate
     s[Intermediate].set_scope("shared")
 
+    # block / thread
     block_x = tvm.thread_axis("blockIdx.x")
     thread_x = tvm.thread_axis("threadIdx.x")
     thread_y = tvm.thread_axis("threadIdx.y")
-    thread_z = tvm.thread_axis("threadIdx.z")
-
-    # *.local.rf = CTR
-    # *.local = OL
-    # * = Output
-
-    # OL: 1 14 14 512, 512; Output: 1 14 14 512, na
-    # Final output
-    cc = s[OL].op.reduce_axis[0]
-    xocc, xicc = s[OL].split(cc, factor=num_thread)
-    CTR = s.rfactor(OL, xocc) # Cross thread reduction
-    # OL: 1 14 14 512, 4; Output: 1 14 14 512, na
+    thread_vx = tvm.thread_axis((0, 4), "vthread", name="vx")
     
-    n, h, w, c = s[Output].op.axis
-    xoc, xic = s[Output].split(c, factor=output_num_per_block)
-    s[Output].reorder(xoc, n, h, w, xic)
-    yo, xo, yi, xi = s[Output].tile(h, w, x_factor=2, y_factor=2)
-    fused = s[Output].fuse(yo, xo)
-    # fused = s[Output].fuse(h, w)
-    fused = s[Output].fuse(fused, n)
-    fused = s[Output].fuse(fused, xoc)
-    s[Output].bind(fused, block_x)
+    # Output
+    rc = s[Out].op.reduce_axis[0]
+    rco, rci = s[Out].split(rc, factor=num_thread_x)
+    CTR = s.rfactor(Out, rci)
+    s[CTR].compute_at(s[Out], s[Out].op.reduce_axis[0])
+    s[Out].bind(s[Out].op.reduce_axis[0], thread_x)
 
-    n, h, w, col = s[OL].op.axis
-    rc = s[OL].op.reduce_axis[0]
-    s[OL].reorder(n, rc, h, w, col)
-    s[CTR].bind(s[CTR].op.reduce_axis[0], thread_x)
-    s[CTR].compute_at(s[OL], s[OL].op.axis[-1])
-    # s[OL].bind(s[OL].op.reduce_axis[0], thread_x)
-    s[OL].compute_at(s[Output], fused)
+    n, h, w, c = s[Out].op.axis
+    yo, xo, yi, xi = s[Out].tile(h, w, x_factor=input_num_per_tile, y_factor=input_num_per_tile)
+    xoc, xic = s[Out].split(c, factor=output_num_per_block)
+    s[Out].reorder(xoc, n, yo, xo, yi, xi, xic)
+    fused_b = s[Out].fuse(yo, xo)
+    fused_b = s[Out].fuse(fused_b, n)
+    fused_b = s[Out].fuse(fused_b, xoc)
+    s[Out].bind(fused_b, block_x)
+    fused_y = s[Out].fuse(yi, xi)
+    s[Out].bind(fused_y, thread_y)
+    s[Out].set_store_predicate(thread_x.var.equal(0))
 
-    # # Intermediate
+    # Intermediate
     n, h, w, c = s[IS].op.axis
-    co, ci = s[IS].split(c, factor=num_thread)
-    s[IS].reorder(co, n, h, w, ci)
-    print(s[IS].op.reduce_axis)
-    yo, xo, yi, xi = s[IS].tile(h, w, x_factor=2, y_factor=2)
-    fused_i = s[IS].fuse(yo, xo)
+    yo, xo, yi, xi = s[IS].tile(h, w, x_factor=input_num_per_tile, y_factor=input_num_per_tile)
+    co, ci = s[IS].split(c, factor=num_thread_x)
+    s[IS].reorder(n, yo, xo, yi, xi, ci, co)
     s[IS].bind(ci, thread_x)
-    ry, rx = s[IS].op.reduce_axis
-    # s[IS].bind(ry, thread_z)
-    # s[IS].bind(rx, thread_y)
-    s[IS].compute_at(s[OL], rc)
+    s[IS].bind(co, thread_vx)
+    fused_is = s[IS].fuse(yi, xi)
+    s[IS].bind(fused_is, thread_y)
+    s[IS].compute_at(s[Out], fused_b)
+    
+    # # Shared Input
+    # s[Padded].compute_at(s[Out], fused)
+    # n, h, w, c = s[Padded].op.axis
+    # s[Padded].bind(c, thread_x)
+    # tvy, vyi = s[Padded].split(h, nparts=2)
+    # tvx, vxi = s[Padded].split(w, nparts=2)
+    # s[Padded].bind(tvy, thread_vy)
+    # s[Padded].bind(tvx, thread_vx)
 
-    # Shared Input
-    s[Padded].compute_at(s[IS], fused_i)
-    n, h, w, c = s[Padded].op.axis
-    co, ci = s[Padded].split(c, factor=num_thread)
-    s[Padded].bind(ci, thread_x)
-
-    # Shared depthwise filter
-    s[FS_d].compute_at(s[OL], rc)
-    # s[FL_d].compute_at(s[OL], col)
-    hd, wd, id, od = s[FS_d].op.axis
-    fused_f = s[FS_d].fuse(id, od)
-    s[FS_d].bind(fused_f, thread_x)
-    # s[FS_d].bind(wd, thread_y)
-    # s[FS_d].bind(hd, thread_z)
-    # s[FS_d].unroll(h)
-    # s[FS_d].unroll(w)
+    # # Shared depthwise filter: Seems of no use
+    # s[FS_d].compute_at(s[Out], fused_b)
+    # hd, wd, id, od = s[FS_d].op.axis
+    # # print(FS_d.op.axis)
+    # # fused_fd = s[FS_d].fuse(id, od)
+    # # s[FS_d].bind(fused_fd, thread_x)
+    # odo, odi = s[FS_d].split(od, factor=num_thread_x)
+    # s[FS_d].bind(odi, thread_x)
+    # fused_fd = s[FS_d].fuse(id, odo)
+    # s[FS_d].bind(fused_fd, thread_y)
+    # s[FL_d].compute_at(s[IS], s[IS].op.reduce_axis[-1])
 
     # Shared 1by1 filter
-    s[FS_1].compute_at(s[OL], rc)
-    # h1, w1, i1, o1 = s[F1_d].op.axis
-    # if output_num_per_block >= num_thread:
-    #     o11, o12 = s[F1_d].split(o1, factor=num_thread)
-    #     s[F1_d].bind(o12, thread_x)
-    # else:
-    #     x = int(num_thread / output_num_per_block)
-    #     i11, i12 = s[F1_d].split(i1, factor=x)
-    #     fused_1 = s[F1_d].fuse(i12, o1)
-    #     s[F1_d].bind(fused_1, thread_x)
-    h1, w1, o1, i1 = s[FS_1].op.axis
-    i11, i12 = s[FS_1].split(i1, factor=num_thread)
-    s[FS_1].bind(i12, thread_x)
-    # s[FL_1].compute_at(s[OL], col)
+    # s[FS_1].compute_at(s[Out], fused_b)
+    # # h1, w1, i1, o1 = s[F1_d].op.axis
+    # # if output_num_per_block >= num_thread:
+    # #     o11, o12 = s[F1_d].split(o1, factor=num_thread)
+    # #     s[F1_d].bind(o12, thread_x)
+    # # else:
+    # #     x = int(num_thread / output_num_per_block)
+    # #     i11, i12 = s[F1_d].split(i1, factor=x)
+    # #     fused_1 = s[F1_d].fuse(i12, o1)
+    # #     s[F1_d].bind(fused_1, thread_x)
+    # h1, w1, o1, i1 = s[FS_1].op.axis
+    # i11, i12 = s[FS_1].split(i1, factor=num_thread)
+    # s[FS_1].bind(i12, thread_x)
+    # # 
+    # s[FS_1].compute_at(s[Out], xic)
+    # # Placeholder for HWIO
+    # h1, w1, o1, i1 = s[FS_1].op.axis
+    # i11, i12 = s[FS_1].split(i1, factor=num_thread_x)
+    # s[FS_1].bind(i12, thread_x)
+    # s[FS_1].bind(i11, thread_y)
+    # s[FL_1].compute_at(s[CTR], s[CTR].op.reduce_axis[0])
 
     return s
 
@@ -338,10 +451,10 @@ def verify_general_fused(parameters, padding_depthwise="SAME", dtype="float32", 
 
         with tvm.target.create(device):
             s = schedule_general_fused_nhwc([nodes[-1]], nodes, params)
-        # print(tvm.lower(s, params, simple_mode=True))
+        print(tvm.lower(s, params, simple_mode=True))
 
         func = tvm.build(s, params, device, name=("GeneralFused_{}".format(len(Filters))))
-        print(func.imported_modules[0].get_source())
+        # print(func.imported_modules[0].get_source())
         # func(a, w, b)
         timer_1 = func.time_evaluator(func.entry_name, ctx, number=10)
         tcost_1 = timer_1(*nd_arrays).mean
