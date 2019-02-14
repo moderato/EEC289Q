@@ -17,7 +17,7 @@ class FilterConstructor:
 		self.dilation = dilation
 		self.NHWC_transpose = NHWC_transpose
 
-def fused_two_conv(input_data, filters):
+def fused_convs(input_data, filters):
 
 	out_dtype = input_data.dtype
 
@@ -136,5 +136,5 @@ if __name__ == "__main__":
 					tvm.placeholder((1, 1, 32, 32), name='Conv2dFilter_1'),
 					depthwise=False, kernel=1, stride=1, dilation=1))
 
-	placeholders = fused_two_conv(Input, Filters)
+	placeholders = fused_convs(Input, Filters)
 	print(placeholders)
