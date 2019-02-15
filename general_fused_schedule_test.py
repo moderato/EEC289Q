@@ -290,8 +290,8 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
     # FL_1 = s.cache_read(FS_1, "local", [Out])
 
     # # Output
-    # Output = Out
-    # OL = s.cache_write(Out, "local")
+    Output = Out
+    OL = s.cache_write(Out, "local")
     # # Intermediate output
     IS = Intermediate
     s[Intermediate].set_scope("shared")
@@ -307,25 +307,29 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
 
     ######## Final output
     # stride
-    xocc, xicc = s[Out].split(s[Out].op.reduce_axis[0], factor=num_thread_x)
-    CTR = s.rfactor(Out, xocc)
+    # print(s[OL].op.axis, s[OL].op.reduce_axis)
+    # print(s[Output].op.axis, s[Output].op.reduce_axis)
+    xocc, xicc = s[OL].split(s[OL].op.reduce_axis[0], factor=num_thread_x)
+    CTR = s.rfactor(OL, xocc)
     # output
-    n, h, w, c = s[Out].op.axis
-    rc = s[Out].op.reduce_axis[0]
-    xoc, xic = s[Out].split(c, factor=num_thread_x)
-    yo, xo, yi, xi = s[Out].tile(h, w, x_factor=output_tile_size, y_factor=output_tile_size)
-    s[Out].reorder(n, yo, xo, xoc, yi, xi, xic)
+    n, h, w, c = s[Output].op.axis
+    rc = s[OL].op.reduce_axis[0]
+    xoc, xic = s[Output].split(c, factor=num_thread_x)
+    yo, xo, yi, xi = s[Output].tile(h, w, x_factor=output_tile_size, y_factor=output_tile_size)
+    s[Output].reorder(n, yo, xo, xoc, yi, xi, xic)
     # thread_x/y
-    fused_b = s[Out].fuse(yi, xi)
-    s[Out].bind(fused_b, thread_y)
-    s[Out].bind(xic, thread_x)
+    fused_b = s[Output].fuse(yi, xi)
+    s[Output].bind(fused_b, thread_y)
+    s[Output].bind(xic, thread_x)
     # thread_block
-    fused_tb = s[Out].fuse(n, yo, xo)
-    s[Out].bind(xoc, block_x)
-    s[Out].bind(fused_tb, block_y)
+    fused_tb = s[Output].fuse(n, yo, xo)
+    s[Output].bind(xoc, block_x)
+    s[Output].bind(fused_tb, block_y)
+    # Write to global
+    s[OL].compute_at(s[Output], xic)
     
     ######## CTR
-    s[CTR].compute_at(s[Out], rc)
+    s[CTR].compute_at(s[OL], rc)
     stride, n, h, w, o = s[CTR].op.axis
     crc = s[CTR].op.reduce_axis[0]
     # print(crc)
@@ -337,7 +341,7 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
         crco = o # No split
 
     # ######### Intermediate
-    s[IS].compute_at(s[Out], rc)
+    s[IS].compute_at(s[OL], rc)
     n, h, w, c = s[IS].op.axis
     co, ci = s[IS].split(c, factor=num_thread_x)
     hw = s[IS].fuse(h, w)
@@ -409,7 +413,7 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
         s[FS_1].bind(fused_1, thread_x)
         s[FS_1].vectorize(ii)
         # # Read to local
-        # s[FL_1].compute_at(s[CTR], s[CTR].op.reduce_axis[0])
+        # s[FL_1].compute_at(s[CTR], crci)
 
     return s
 
@@ -430,7 +434,7 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
     return s
 
 
-def verify_general_fused(parameters, padding_depthwise="SAME", dtype="float32", layout="NHWC", NHWC_transpose=False):
+def verify_general_fused(parameters, padding_depthwise="SAME", dtype="float32", layout="NHWC", NHWC_transpose=False, print_code=True):
     assert layout in ["NHWC", "NCHW"]
 
     p = parameters
@@ -503,18 +507,21 @@ def verify_general_fused(parameters, padding_depthwise="SAME", dtype="float32", 
 
         with tvm.target.create(device):
             s = schedule_general_fused_nhwc([nodes[-1]], nodes, params, NHWC_transpose)
-        print(tvm.lower(s, params, simple_mode=True))
+        if print_code:
+            print(tvm.lower(s, params, simple_mode=True))
 
         func = tvm.build(s, params, device, name=("GeneralFused_{}".format(len(Filters))))
-        # print(func.imported_modules[0].get_source())
+        # if print_code:
+            # print(func.imported_modules[0].get_source())
         # func(a, w, b)
         timer_1 = func.time_evaluator(func.entry_name, ctx, number=10)
         tcost_1 = timer_1(*nd_arrays).mean
         # np.testing.assert_allclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
         d = ~np.isclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
-        print(nd_arrays[-1].asnumpy()[d])
-        print(ref_data[-1][d])
-        print(np.where(d))
+        if (np.sum(d) > 0):
+            print(nd_arrays[-1].asnumpy()[d])
+            print(ref_data[-1][d])
+            print(np.where(d))
         # print("Error rate: {:.2f}%".format((len(d) / len(ref_data[-1]) * 100)))
         print("General Fused of {} layers ({}): average running time is {:.2f} us.".format(len(Filters), layout, tcost_1 * 1e6))
 
@@ -607,14 +614,17 @@ def verify_general_fused(parameters, padding_depthwise="SAME", dtype="float32", 
 #         check_device(device)
 
 if __name__ == "__main__":
-    # parameters = [1, 112, 32, 3, 1, True]
-    # verify_depthwise(parameters, NHWC_transpose=True)
+    parameters = []
 
+    # parameters.append([1, 112, 32, 3, 1, True])
+    # for p in parameters:
+    #     verify_depthwise(parameters, NHWC_transpose=True)
 
-    # parameters = [1, 112, 32, 3, 1, True, 1, 32, False] # 122.78 us
-    parameters = [1, 56, 128, 3, 1, True, 1, 128, False] # 398.18 / 456.16 us, 1746.20 us (TBD)
-    # parameters = [1, 28, 256, 3, 1, True, 1, 256, False] # 389.57 / 423.63 us
-    # parameters = [1, 14, 512, 3, 1, True, 1, 512, False] # 367.71 us, 344.27 us
+    # parameters.append([1, 112, 32, 3, 1, True, 1, 32, False]) # 122.78 us
+    parameters.append([1, 56, 128, 3, 1, True, 1, 128, False]) # 398.18 / 456.16 us, 1746.20 us (TBD)
+    # parameters.append([1, 28, 256, 3, 1, True, 1, 256, False]) # 389.57 / 423.63 us
+    # parameters.append([1, 14, 512, 3, 1, True, 1, 512, False]) # 367.71 us, 344.27 us
 
-    verify_general_fused(parameters, NHWC_transpose=False)
+    for p in parameters:
+        verify_general_fused(p, NHWC_transpose=False, print_code=True)
     
