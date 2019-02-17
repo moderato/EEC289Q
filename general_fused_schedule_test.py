@@ -282,21 +282,22 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
     # num_vthread_x = 3
     # num_vthread_y = 3
 
-    Padded = s.cache_read(PaddedInput, "shared", [Intermediate])
     s[PaddedInput].compute_inline()
+    Padded = s.cache_read(PaddedInput, "shared", [Intermediate])
     # FS_d = s.cache_read(F_d, "shared", [Intermediate])
     # FL_d = s.cache_read(FS_d, "local", [Intermediate])
     FS_1 = s.cache_read(F_1, "shared", [Out])
     # FL_1 = s.cache_read(FS_1, "local", [Out])
 
-    # # Output
-    Output = Out
-    OL = s.cache_write(Out, "local")
     # # Intermediate output
     IS = Intermediate
     s[Intermediate].set_scope("shared")
-    # ISL = s.cache_read(IS, "local", [Out])
-
+    ITM = s.cache_write(Intermediate, "local")
+    ISL = s.cache_read(Intermediate, "local", [Out])
+    # # Output
+    Output = Out
+    OL = s.cache_write(Out, "local")
+    
     block_x = tvm.thread_axis("blockIdx.x")
     block_y = tvm.thread_axis("blockIdx.y")
     thread_x = tvm.thread_axis("threadIdx.x")
@@ -341,6 +342,7 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
         crco = o # No split
 
     # ######### Intermediate
+    s[ISL].compute_at(s[CTR], crci)
     s[IS].compute_at(s[OL], rc)
     n, h, w, c = s[IS].op.axis
     co, ci = s[IS].split(c, factor=num_thread_x)
@@ -351,8 +353,7 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
     # ry, rx = s[IS].op.reduce_axis
     # s[IS].unroll(ry)
     # s[IS].unroll(rx)
-    # # Read to local
-    # s[ISL].compute_at(s[CTR], s[CTR].op.reduce_axis[0])
+    s[ITM].compute_at(s[IS], ci)
 
     ######## Shared Input
     s[Padded].compute_at(s[IS], hw)
@@ -401,6 +402,8 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
         s[FS_1].vectorize(oi)
         # # Read to local
         # s[FL_1].compute_at(s[CTR], crci)
+        # # Read input to local
+        # s[ISL].compute_at(s[CTR], crci)
     else:
         ######## Shared 1by1 filter
         s[FS_1].compute_at(s[CTR], o)
