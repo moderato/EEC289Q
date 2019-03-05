@@ -94,7 +94,7 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
     # fused = s[FS_d].fuse(fi, ci)
     # s[FS_d].bind(fused, thread_x)
 
-    # ########################################### 72 us for 112
+    # # ########################################### 72 us for 112
     # PaddedInput = nodes[1]
     # Intermediate = nodes[2]
     # Out = nodes[3]
@@ -123,7 +123,7 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
     # n, h, w, c = s[Out].op.axis
     # xoc, xic = s[Out].split(c, factor=num_thread)
     # s[Out].reorder(xoc, n, h, w, xic)
-    # yo, xo, yi, xi = s[Out].tile(h, w, x_factor=4, y_factor=4)
+    # yo, xo, yi, xi = s[Out].tile(h, w, x_factor=2, y_factor=2)
     # fused = s[Out].fuse(yo, xo)
     # fused = s[Out].fuse(fused, n)
     # fused = s[Out].fuse(fused, xoc)
@@ -149,8 +149,8 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
     # s[Intermediate].compute_at(s[Out], xi)
 
     # # # Unroll, small improvements without sharing FS_d and local IL
-    # s[IL].unroll(s[IL].op.reduce_axis[0])
-    # s[IL].unroll(s[IL].op.reduce_axis[1])
+    # # s[IL].unroll(s[IL].op.reduce_axis[0])
+    # # s[IL].unroll(s[IL].op.reduce_axis[1])
 
     # # # Shared depthwise filter
     # # s[FS_d].compute_at(s[Intermediate], w)
@@ -158,7 +158,7 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
     # # fused = s[FS_d].fuse(fi, ci)
     # # s[FS_d].bind(fused, thread_x)
 
-    # ####################### 2400 us for 112
+    ####################### 2400 us for 112
     # PaddedInput = nodes[1]
     # Intermediate = nodes[2]
     # Out = nodes[3]
@@ -225,49 +225,49 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
     # s[IS].bind(fused_is, thread_y)
     # s[IS].compute_at(s[Out], fused_b)
     
-    # # # Shared Input
-    # # s[Padded].compute_at(s[Out], fused)
-    # # n, h, w, c = s[Padded].op.axis
-    # # s[Padded].bind(c, thread_x)
-    # # tvy, vyi = s[Padded].split(h, nparts=2)
-    # # tvx, vxi = s[Padded].split(w, nparts=2)
-    # # s[Padded].bind(tvy, thread_vy)
-    # # s[Padded].bind(tvx, thread_vx)
+    # # Shared Input
+    # s[Padded].compute_at(s[Out], fused)
+    # n, h, w, c = s[Padded].op.axis
+    # s[Padded].bind(c, thread_x)
+    # tvy, vyi = s[Padded].split(h, nparts=2)
+    # tvx, vxi = s[Padded].split(w, nparts=2)
+    # s[Padded].bind(tvy, thread_vy)
+    # s[Padded].bind(tvx, thread_vx)
 
-    # # # Shared depthwise filter: Seems of no use
-    # # s[FS_d].compute_at(s[Out], fused_b)
-    # # hd, wd, id, od = s[FS_d].op.axis
-    # # # print(FS_d.op.axis)
-    # # # fused_fd = s[FS_d].fuse(id, od)
-    # # # s[FS_d].bind(fused_fd, thread_x)
-    # # odo, odi = s[FS_d].split(od, factor=num_thread_x)
-    # # s[FS_d].bind(odi, thread_x)
-    # # fused_fd = s[FS_d].fuse(id, odo)
-    # # s[FS_d].bind(fused_fd, thread_y)
-    # # s[FL_d].compute_at(s[IS], s[IS].op.reduce_axis[-1])
+    # # Shared depthwise filter: Seems of no use
+    # s[FS_d].compute_at(s[Out], fused_b)
+    # hd, wd, id, od = s[FS_d].op.axis
+    # # print(FS_d.op.axis)
+    # # fused_fd = s[FS_d].fuse(id, od)
+    # # s[FS_d].bind(fused_fd, thread_x)
+    # odo, odi = s[FS_d].split(od, factor=num_thread_x)
+    # s[FS_d].bind(odi, thread_x)
+    # fused_fd = s[FS_d].fuse(id, odo)
+    # s[FS_d].bind(fused_fd, thread_y)
+    # s[FL_d].compute_at(s[IS], s[IS].op.reduce_axis[-1])
 
-    # # Shared 1by1 filter
-    # # s[FS_1].compute_at(s[Out], fused_b)
-    # # # h1, w1, i1, o1 = s[F1_d].op.axis
-    # # # if output_num_per_block >= num_thread:
-    # # #     o11, o12 = s[F1_d].split(o1, factor=num_thread)
-    # # #     s[F1_d].bind(o12, thread_x)
-    # # # else:
-    # # #     x = int(num_thread / output_num_per_block)
-    # # #     i11, i12 = s[F1_d].split(i1, factor=x)
-    # # #     fused_1 = s[F1_d].fuse(i12, o1)
-    # # #     s[F1_d].bind(fused_1, thread_x)
-    # # h1, w1, o1, i1 = s[FS_1].op.axis
-    # # i11, i12 = s[FS_1].split(i1, factor=num_thread)
-    # # s[FS_1].bind(i12, thread_x)
-    # # # 
-    # # s[FS_1].compute_at(s[Out], xic)
-    # # # Placeholder for HWIO
-    # # h1, w1, o1, i1 = s[FS_1].op.axis
-    # # i11, i12 = s[FS_1].split(i1, factor=num_thread_x)
-    # # s[FS_1].bind(i12, thread_x)
-    # # s[FS_1].bind(i11, thread_y)
-    # # s[FL_1].compute_at(s[CTR], s[CTR].op.reduce_axis[0])
+    # Shared 1by1 filter
+    # s[FS_1].compute_at(s[Out], fused_b)
+    # # h1, w1, i1, o1 = s[F1_d].op.axis
+    # # if output_num_per_block >= num_thread:
+    # #     o11, o12 = s[F1_d].split(o1, factor=num_thread)
+    # #     s[F1_d].bind(o12, thread_x)
+    # # else:
+    # #     x = int(num_thread / output_num_per_block)
+    # #     i11, i12 = s[F1_d].split(i1, factor=x)
+    # #     fused_1 = s[F1_d].fuse(i12, o1)
+    # #     s[F1_d].bind(fused_1, thread_x)
+    # h1, w1, o1, i1 = s[FS_1].op.axis
+    # i11, i12 = s[FS_1].split(i1, factor=num_thread)
+    # s[FS_1].bind(i12, thread_x)
+    # # 
+    # s[FS_1].compute_at(s[Out], xic)
+    # # Placeholder for HWIO
+    # h1, w1, o1, i1 = s[FS_1].op.axis
+    # i11, i12 = s[FS_1].split(i1, factor=num_thread_x)
+    # s[FS_1].bind(i12, thread_x)
+    # s[FS_1].bind(i11, thread_y)
+    # s[FL_1].compute_at(s[CTR], s[CTR].op.reduce_axis[0])
 
     # #################################
     PaddedInput = nodes[1]
@@ -333,16 +333,16 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
     s[CTR].compute_at(s[OL], rc)
     stride, n, h, w, o = s[CTR].op.axis
     crc = s[CTR].op.reduce_axis[0]
-    # print(crc)
-    crc_nparts = int(num_thread_x / 4 / num_thread_y)
+    # # print(crc)
+    crc_nparts = 8 # int(num_thread_x / 4 / num_thread_y)
     if crc_nparts > 0:
         crco, crci = s[CTR].split(crc, nparts=crc_nparts)
-        # s[CTR].unroll(crci)
+        s[CTR].unroll(crci)
     else:
         crco = o # No split
 
     # ######### Intermediate
-    s[ISL].compute_at(s[CTR], crci)
+    s[ISL].compute_at(s[CTR], crco) # s[CTR].op.reduce_axis[0] ############# Read intermediate to local
     s[IS].compute_at(s[OL], rc)
     n, h, w, c = s[IS].op.axis
     co, ci = s[IS].split(c, factor=num_thread_x)
@@ -384,7 +384,7 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
 
     ######## Shared 1by1 filter
     if not NHWC_transpose:
-        s[FS_1].compute_at(s[CTR], crco) # The other option: o
+        s[FS_1].compute_at(s[CTR], o) # Options: crco/o
         h1, w1, i1, o1 = s[FS_1].op.axis
         # # Old binding
         # io, ii = s[FS_1].split(i1, factor=num_thread_x)
@@ -401,43 +401,46 @@ def schedule_general_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
         s[FS_1].bind(fused_1, thread_x)
         s[FS_1].vectorize(oi)
         # # Read to local
-        # s[FL_1].compute_at(s[CTR], crci)
+        # s[FL_1].compute_at(s[CTR], s[CTR].op.reduce_axis[0])
         # # Read input to local
-        # s[ISL].compute_at(s[CTR], crci)
-    else:
-        ######## Shared 1by1 filter
-        s[FS_1].compute_at(s[CTR], o)
-        h1, w1, o1, i1 = s[FS_1].op.axis
-        io, ii = s[FS_1].split(i1, factor=4)
-        oo, oi = s[FS_1].split(o1, factor=4)
-        ooo, ooi = s[FS_1].split(oo, factor=num_thread_y)
-        fused_1 = s[FS_1].fuse(oi, io)
-        s[FS_1].bind(ooi, thread_y)
-        s[FS_1].bind(fused_1, thread_x)
-        s[FS_1].vectorize(ii)
-        # # Read to local
-        # s[FL_1].compute_at(s[CTR], crci)
+        # s[ISL].compute_at(s[CTR], s[CTR].op.reduce_axis[0]) # Options: s[CTR].op.reduce_axis[0] / crco
+
+        #### No good bindings
+        # # # Old binding
+        # # i1_factor = int(num_thread_x / num_thread_y)
+        # # oo, oi = s[FS_1].split(o1, factor=num_thread_y)
+        # # io, ii = s[FS_1].split(i1, factor=i1_factor)
+        # # s[FS_1].reorder(h1, w1, oo, io, ii, oi)
+        # # fused_1 = s[FS_1].fuse(ii, oi)
+        # # s[FS_1].bind(fused_1, thread_x)
+        # # s[FS_1].bind(io, thread_y)
+        # # Vectorization
+        # i1_factor = int(num_thread_x / num_thread_y)
+        # oo, oi = s[FS_1].split(o1, factor=num_thread_y*4)
+        # oio, oii = s[FS_1].split(oi, factor=4)
+        # io, ii = s[FS_1].split(i1, factor=i1_factor)
+        # s[FS_1].reorder(h1, w1, oo, io, ii, oio, oii)
+        # fused_1 = s[FS_1].fuse(ii, oio)
+        # s[FS_1].bind(fused_1, thread_x)
+        # s[FS_1].bind(io, thread_y)
+        # s[FS_1].vectorize(oii)
+
+    # else:
+    #     s[FS_1].compute_at(s[CTR], o)
+    #     h1, w1, o1, i1 = s[FS_1].op.axis
+    #     io, ii = s[FS_1].split(i1, factor=4)
+    #     oo, oi = s[FS_1].split(o1, factor=4)
+    #     ooo, ooi = s[FS_1].split(oo, factor=num_thread_y)
+    #     fused_1 = s[FS_1].fuse(oi, io)
+    #     s[FS_1].bind(ooi, thread_y)
+    #     s[FS_1].bind(fused_1, thread_x)
+    #     s[FS_1].vectorize(ii)
+    #     # # Read to local
+    #     # s[FL_1].compute_at(s[CTR], crci)
 
     return s
 
-
-
-# def schedule_depthwise_nhwc(outs, nodes, params):
-    outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
-    s = tvm.create_schedule([x.op for x in outs])
-
-    print(nodes, params)
-    PaddedInput = nodes[1]
-    Out = nodes[2]
-    F_d = params[1]
-
-    s[PaddedInput].compute_inline()
-    s[Out].compute_inline()
-
-    return s
-
-
-def verify_general_fused(parameters, padding_depthwise="SAME", dtype="float32", layout="NHWC", NHWC_transpose=False, print_code=True):
+def verify_general_fused(parameters, padding_depthwise="SAME", dtype="float32", layout="NHWC", NHWC_transpose=False, print_code=True, save_data=False, export_code=False):
     assert layout in ["NHWC", "NCHW"]
 
     p = parameters
@@ -493,6 +496,23 @@ def verify_general_fused(parameters, padding_depthwise="SAME", dtype="float32", 
         return ref_data
     ref_data = get_ref_data()
 
+    if save_data:
+        # Save ref data
+        for i in range(0, len(ref_data)):
+            filename = ""
+            if i == 0:
+                filename += "input_"
+            elif i == 1:
+                filename += "filter_d_"
+            elif i == 2:
+                filename += "filter_1_"
+            else:
+                filename += "output_"
+            np.save(filename + "%d_%d_%d_%d" % ref_data[i].shape, ref_data[i])
+
+    tmp = np.load("output_1_112_112_32.npy")
+    print(tmp[0,0,0,0:100])
+
     def check_device(device):
         if not tvm.module.enabled(device):
             print("Skip because %s is not enabled" % device)
@@ -513,9 +533,15 @@ def verify_general_fused(parameters, padding_depthwise="SAME", dtype="float32", 
         if print_code:
             print(tvm.lower(s, params, simple_mode=True))
 
+        # with tvm.build_config(  auto_unroll_max_step=16,
+        #                         double_buffer_split_loop=8):
         func = tvm.build(s, params, device, name=("GeneralFused_{}".format(len(Filters))))
         # if print_code:
-            # print(func.imported_modules[0].get_source())
+        #     print(func.imported_modules[0].get_source())
+        if export_code:
+            cuda_code = func.imported_modules[0].get_source()
+            # write_code(cuda_code, "kernel_%s_%s_%s_%s.cu" % nd_arrays[0].asnumpy().shape)
+            write_code(cuda_code, "kernel.cu")
         # func(a, w, b)
         timer_1 = func.time_evaluator(func.entry_name, ctx, number=10)
         tcost_1 = timer_1(*nd_arrays).mean
@@ -531,91 +557,6 @@ def verify_general_fused(parameters, padding_depthwise="SAME", dtype="float32", 
     for device in ['cuda']:
         check_device(device)
 
-# def verify_depthwise(parameters, padding_depthwise="SAME", dtype="float32", layout="NHWC", NHWC_transpose=False):
-#     assert layout in ["NHWC", "NCHW"]
-
-#     p = parameters
-#     input_shape = (p[0], p[1], p[1], p[2])
-#     filter_1_shape = (p[3], p[3], p[4], p[2]) if NHWC_transpose else (p[3], p[3], p[2], p[4])
-
-#     # placeholder (NHWC)
-#     # Input: NHWC, Kernel: HWIO for both depthwise and conv2d
-#     Input = tvm.placeholder(input_shape, name='Input')
-#     DepthwiseFilter_1 = tvm.placeholder(filter_1_shape, name='DepthwiseFilter_1')
-#     dtype = Input.dtype
-
-#     # For getting ref data
-#     placeholders = []
-#     placeholders.append(Input)
-#     placeholders.append(DepthwiseFilter_1)
-
-#     # For getting schedule
-#     Filters = []
-#     Filters.append(FilterConstructor(
-#                     DepthwiseFilter_1,
-#                     depthwise=p[5], kernel=p[3], stride=1, dilation=1, NHWC_transpose=NHWC_transpose))
-
-#     # Get the graph
-#     # nodes: all nodes in the graph
-#     # params: inputs & outputs of the graph
-#     nodes, params = fused_convs(Input, Filters)
-
-#     # @memoize("verify_nhwc")
-#     def get_ref_data():
-#         # Pretending the input_data is some output_data from stage -1
-#         output_data = np.random.uniform(size=get_const_tuple(Input.shape)).astype(dtype)
-#         ref_data = [output_data] 
-        
-#         for idx, f in enumerate(Filters):
-#             p = f.placeholder
-#             filter_data = np.random.uniform(size=get_const_tuple(p.shape)).astype(dtype)
-#             ref_data.append(filter_data)
-
-#             if "Depthwise" in p.name:
-#                 output_data = topi.testing.depthwise_conv2d_python_nhwc(output_data, filter_data, stride=[f.stride, f.stride], padding=f.padding, filter_transpose=f.NHWC_transpose)
-#             else: # Normal convolution
-#                 output_data = topi.testing.conv2d_nhwc_python(output_data, filter_data, f.stride, f.padding, filter_transpose=f.NHWC_transpose)
-#             if idx == len(Filters) - 1: # At the last stage, append output_data as the final output for reference
-#                 ref_data.append(output_data)
-
-#         return ref_data
-#     ref_data = get_ref_data()
-
-#     def check_device(device):
-#         if not tvm.module.enabled(device):
-#             print("Skip because %s is not enabled" % device)
-#             return
-#         print("Running on target: %s" % device)
-
-#         ctx = tvm.context(device, 0)
-
-#         nd_arrays = []
-#         for idx, array in enumerate(ref_data):
-#             if idx == len(ref_data) - 1: # Omit output data here
-#                 break
-#             nd_arrays.append(tvm.nd.array(array, ctx))
-#         nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(nodes[-1].shape), dtype=nodes[-1].dtype), ctx)) # Append 0 output data
-
-#         with tvm.target.create(device):
-#             s = schedule_depthwise_nhwc([nodes[-1]], nodes, params)
-#         print(tvm.lower(s, params, simple_mode=True))
-
-#         func = tvm.build(s, params, device, name=("GeneralFused_{}".format(len(Filters))))
-#         # print(func.imported_modules[0].get_source())
-#         # func(a, w, b)
-#         timer_1 = func.time_evaluator(func.entry_name, ctx, number=10)
-#         tcost_1 = timer_1(*nd_arrays).mean
-#         # np.testing.assert_allclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
-#         d = ~np.isclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
-#         print(nd_arrays[-1].asnumpy()[d])
-#         print(ref_data[-1][d])
-#         print(np.where(d))
-#         # print("Error rate: {:.2f}%".format((len(d) / len(ref_data[-1]) * 100)))
-#         print("General Fused of {} layers ({}): average running time is {:.2f} us.".format(len(Filters), layout, tcost_1 * 1e6))
-
-#     for device in ['cuda']:
-#         check_device(device)
-
 if __name__ == "__main__":
     parameters = []
 
@@ -623,11 +564,11 @@ if __name__ == "__main__":
     # for p in parameters:
     #     verify_depthwise(parameters, NHWC_transpose=True)
 
-    # parameters.append([1, 112, 32, 3, 1, True, 1, 32, False]) # 122.78 us
-    parameters.append([1, 56, 128, 3, 1, True, 1, 128, False]) # 398.18 / 456.16 us, 1746.20 us (TBD)
+    parameters.append([1, 112, 32, 3, 1, True, 1, 32, False]) # 122.78 us
+    # parameters.append([1, 56, 128, 3, 1, True, 1, 128, False]) # 398.18 / 456.16 us, 1746.20 us (TBD)
     # parameters.append([1, 28, 256, 3, 1, True, 1, 256, False]) # 389.57 / 423.63 us
     # parameters.append([1, 14, 512, 3, 1, True, 1, 512, False]) # 367.71 us, 344.27 us
 
     for p in parameters:
-        verify_general_fused(p, NHWC_transpose=False, print_code=True)
+        verify_general_fused(p, NHWC_transpose=False, print_code=True, save_data=True, export_code=True)
     

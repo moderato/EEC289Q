@@ -7,7 +7,7 @@ from topi.nn.util import get_pad_tuple
 from topi.util import simplify
 
 class FilterConstructor:
-	def __init__(self, placeholder, layout="NHWC", depthwise=False, kernel=3, stride=1, padding="VALID", dilation=1, NHWC_transpose=False):
+	def __init__(self, placeholder, layout="NHWC", depthwise=False, kernel=3, stride=1, padding="SAME", dilation=1, NHWC_transpose=False):
 		self.placeholder = placeholder
 		self.layout = layout
 		self.depthwise = depthwise
