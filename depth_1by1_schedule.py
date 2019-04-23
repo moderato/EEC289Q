@@ -456,8 +456,8 @@ def schedule_depthwise_conv2d_nhwc_reuse(outs, A=None):
         #     fused = s[FS].fuse(fi, ci)
         #     s[FS].bind(fused, thread_x)
 
-        # if A is not None:
-        #     print(tvm.lower(s, [A, Filter, Output], simple_mode=True))
+        if A is not None:
+            print(tvm.lower(s, [A, Filter, Output], simple_mode=True))
 
     def traverse(OP):
         # inline all one-to-one-mapping operators except the last stage (output)
@@ -581,73 +581,128 @@ def schedule_conv2d_nhwc(outs, A=None):
     # Apad: NHWC, Filter: HWIO
 
     outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
-    sch = tvm.create_schedule([x.op for x in outs])
+    s = tvm.create_schedule([x.op for x in outs])
     def _schedule(Apad, W, B):
         """Schedule conv2d_hwcn"""
-        sch[Apad].compute_inline()
-        AA = sch.cache_read(Apad, "shared", [B])
-        # WW = sch.cache_read(W, "shared", [B])
-        # AL = sch.cache_read(AA, "local", [B])
-        # WL = sch.cache_read(WW, "local", [B])
+        s[Apad].compute_inline()
+        AA = s.cache_read(Apad, "shared", [B])
+        WW = s.cache_read(W, "shared", [B])
+        AL = s.cache_read(AA, "local", [B])
+        WL = s.cache_read(WW, "local", [B])
 
-        if B.op in sch.outputs:
+        if B.op in s.outputs:
             Out = B
-            BL = sch.cache_write(Out, "local")
+            BL = s.cache_write(Out, "local")
         else:
-            Out = sch.outputs[0].output(0)
-            sch[B].set_scope("local")
+            Out = s.outputs[0].output(0)
+            s[B].set_scope("local")
             BL = B
 
         assert tvm.ir_pass.Simplify(W.shape[0]).value == 1 and \
                 tvm.ir_pass.Simplify(W.shape[1]).value == 1
 
-        num_thread = tvm.ir_pass.Simplify(Apad.shape[3]).value
-
         ######################## 1.06 ms
+        # num_thread = tvm.ir_pass.Simplify(Apad.shape[3]).value
         # block_x = tvm.thread_axis("blockIdx.x")
         # thread_x = tvm.thread_axis((0, num_thread), "threadIdx.x")
 
-        # ni, hi, wi, ci = sch[Out].op.axis
-        # sch[BL].compute_at(sch[Out], ci)
+        # ni, hi, wi, ci = s[Out].op.axis
+        # s[BL].compute_at(s[Out], ci)
 
-        # wi = sch[Out].fuse(hi, wi)
-        # # wi = sch[Out].fuse(ni, wi)
+        # wi = s[Out].fuse(hi, wi)
+        # # wi = s[Out].fuse(ni, wi)
 
-        # sch[Out].bind(wi, block_x)
-        # sch[Out].bind(ci, thread_x)
+        # s[Out].bind(wi, block_x)
+        # s[Out].bind(ci, thread_x)
 
         ####################### 145.21
-        vthread = 2
+        # num_thread = tvm.ir_pass.Simplify(Apad.shape[3]).value
+
+        # vthread = 2
+
+        # block_x = tvm.thread_axis("blockIdx.x")
+        # thread_x = tvm.thread_axis((0, num_thread), "threadIdx.x")
+        # thread_xz = tvm.thread_axis((0, vthread), "vthread", name="vx")
+        # thread_yz = tvm.thread_axis((0, vthread), "vthread", name="vy")
+
+        # ni, hi, wi, ci = s[Out].op.axis
+        # hia, hib = s[Out].split(hi, factor=vthread)
+        # wia, wib = s[Out].split(wi, factor=vthread)
+        # s[Out].reorder(ni, hia, wia, hib, wib, ci)
+        # hw = s[Out].fuse(hia, wia)
+        # s[Out].bind(hw, block_x)
+        # s[Out].bind(hib, thread_yz)
+        # s[Out].bind(wib, thread_xz)
+        # s[Out].bind(ci, thread_x)
+
+        # s[BL].compute_at(s[Out], ci)
+        # s[AA].compute_at(s[Out], ci)
+
+        # ni, hi, wi, ci = s[AA].op.axis
+        # s[AA].bind(ci, thread_x)
+
+        #######################
+        output_tile = 2
+        num_thread_x = 32
+        num_thread_y = output_tile * output_tile
+        # vthread = 2
 
         block_x = tvm.thread_axis("blockIdx.x")
-        thread_x = tvm.thread_axis((0, num_thread), "threadIdx.x")
-        thread_xz = tvm.thread_axis((0, vthread), "vthread", name="vx")
-        thread_yz = tvm.thread_axis((0, vthread), "vthread", name="vy")
+        thread_x = tvm.thread_axis((0, num_thread_x), "threadIdx.x")
+        thread_y = tvm.thread_axis((0, num_thread_y), "threadIdx.y")
+        # thread_xz = tvm.thread_axis((0, vthread), "vthread", name="vx")
+        # thread_yz = tvm.thread_axis((0, vthread), "vthread", name="vy")
 
-        ni, hi, wi, ci = sch[Out].op.axis
-        hia, hib = sch[Out].split(hi, factor=vthread)
-        wia, wib = sch[Out].split(wi, factor=vthread)
-        sch[Out].reorder(ni, hia, wia, hib, wib, ci)
-        hw = sch[Out].fuse(hia, wia)
-        sch[Out].bind(hw, block_x)
-        sch[Out].bind(hib, thread_yz)
-        sch[Out].bind(wib, thread_xz)
-        sch[Out].bind(ci, thread_x)
+        ni, hi, wi, ci = s[Out].op.axis
+        cio, cii = s[Out].split(ci, factor=num_thread_x)
+        yo, xo, yi, xi = s[Out].tile(hi, wi, x_factor=output_tile, y_factor=output_tile)
+        s[Out].reorder(ni, yo, xo, cio, yi, xi, cii)
+        fused_o = s[Out].fuse(yi, xi)
+        s[Out].bind(fused_o, thread_y)
+        s[Out].bind(cii, thread_x)
+        fused_b = s[Out].fuse(ni, yo, xo, cio)
+        s[Out].bind(fused_b, block_x)
 
-        sch[BL].compute_at(sch[Out], ci)
-        sch[AA].compute_at(sch[Out], ci)
+        # # Local
+        s[BL].compute_at(s[Out], cii)
+        hl, wl, il, ol = s[BL].op.axis
+        ry, rx, rc = s[BL].op.reduce_axis
+        rco, rci = s[BL].split(rc, factor=64)
+        s[BL].reorder(hl, wl, rco, ry, rx, rci, il, ol)
 
-        ni, hi, wi, ci = sch[AA].op.axis
-        sch[AA].bind(ci, thread_x)
+        # Input
+        s[AA].compute_at(s[BL], rx)
+        s[AL].compute_at(s[BL], rci)
+        n, h, w, c = s[AA].op.axis
+        hw = s[AA].fuse(h, w)
+        tx, c = s[AA].split(c, nparts=num_thread_x)
+        ty, hw = s[AA].split(hw, nparts=num_thread_y)
+        _, c = s[AA].split(c, factor=4)
+        s[AA].reorder(ty, tx, n, hw, c)
+        s[AA].bind(ty, thread_y)
+        s[AA].bind(tx, thread_x)
+        s[AA].vectorize(c)
 
-        # if A is not None:
-        #     print(tvm.lower(sch, [A, W, Out], simple_mode=True))
+        # Filter
+        s[WW].compute_at(s[BL], rx)
+        s[WL].compute_at(s[BL], rci)
+        h, w, ic, oc = s[WW].op.axis
+        tx, oc = s[WW].split(oc, nparts=num_thread_x)
+        ty, ic = s[WW].split(ic, nparts=num_thread_y)
+        _, oc = s[WW].split(oc, factor=4)
+        s[WW].reorder(ty, tx, h, w, ic, oc)
+        s[WW].bind(ty, thread_y)
+        s[WW].bind(tx, thread_x)
+        s[WW].vectorize(oc)
+
+        if A is not None:
+            print(tvm.lower(s, [A, W, Out], simple_mode=True))
 
     def traverse(operator):
         """Traverse operators from computation graph"""
         if tag.is_broadcast(operator.tag):
-            if operator not in sch.outputs:
-                sch[operator].compute_inline()
+            if operator not in s.outputs:
+                s[operator].compute_inline()
             for tensor in operator.input_tensors:
                 if tensor.op.input_tensors:
                     traverse(tensor.op)
@@ -661,7 +716,7 @@ def schedule_conv2d_nhwc(outs, A=None):
             raise RuntimeError("Unsupported operator: %s" % operator.tag)
 
     traverse(outs[0].op)
-    return sch
+    return s
 
 @autotvm.template
 def schedule_conv2d_nhwc_auto(batch, in_channel, in_size, num_filter, kernel, stride, padding="SAME", dtype="float32"):

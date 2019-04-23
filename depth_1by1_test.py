@@ -108,7 +108,7 @@ def depthwise_conv2d_with_workload_nhwc(batch, in_channel, in_size, channel_mult
         # scale_shift_tvm = tvm.nd.array(np.zeros(shape=get_const_tuple(ScaleShift.shape), dtype=dtype), ctx)
         # relu_tvm = tvm.nd.array(np.zeros(shape=get_const_tuple(Relu.shape), dtype=dtype), ctx)
         # launch kernel 1 (depthwise_conv2d)
-        timer_1 = f1.time_evaluator(f1.entry_name, ctx, number=1000)
+        timer_1 = f1.time_evaluator(f1.entry_name, ctx, number=10)
         tcost_1 = timer_1(input_tvm, filter_tvm, depthwise_conv2d_tvm).mean
         # launch kernel 2 (depthwise_conv2d + scale_shift)
         # timer_2 = f2.time_evaluator(f2.entry_name, ctx, number=10)
@@ -323,154 +323,11 @@ def conv2d_nhwc_auto(batch, in_channel, in_size, num_filter, kernel, stride, pad
     for device in ['cuda']:
         check_device(device)
 
-# def depthwise_1by1_fused(batch, in_channel_depthwise, in_size, channel_multiplier, kernel_depthwise, stride_depthwise, num_filter, padding_depthwise="SAME", dtype="float32", layout="NCHW"):
-#     assert layout in ["NCHW", "NHWC"]
-#     in_h_d = in_w_d = in_size
-#     in_c_d = kernel_c_d = in_channel_depthwise
-#     kernel_h_d = kernel_w_d = kernel_depthwise
-#     out_c_d = in_c_1 = in_channel_depthwise * channel_multiplier
-#     stride_h_d = stride_w_d = stride_depthwise
-
-#     kernel_h_1 = kernel_w_1 = 1
-#     stride_h_1 = stride_w_1 = 1
-#     padding_h_1 = padding_w_1 = 0
-#     out_c_1 = num_filter
-
-#     # placeholder
-#     if layout == "NCHW":
-#         # Input: NCHW, Kernel: CMHW for depthwise, OIHW for conv2d
-#         Input = tvm.placeholder((batch, in_c_d, in_h_d, in_w_d), name='Input')
-#         Kernel_d = tvm.placeholder((kernel_c_d, channel_multiplier, kernel_h_d, kernel_w_d), name='Kernel_d')
-#         Kernel_1 = tvm.placeholder((out_c_1, in_c_1, kernel_h_1, kernel_w_1), name='Kernel_1')
-#     else: # NHWC
-#         # Input: NHWC, Kernel: HWCM for depthwise, HWIO for conv2d
-#         Input = tvm.placeholder((batch, in_h_d, in_w_d, in_c_d), name='Input')
-#         Kernel_d = tvm.placeholder((kernel_h_d, kernel_w_d, kernel_c_d, channel_multiplier), name='Kernel_d')
-#         Kernel_1 = tvm.placeholder((kernel_h_1, kernel_w_1, in_c_1, out_c_1), name='Kernel_1')
-    
-#     Scale_d = tvm.placeholder((out_c_d,), name='Scale_d')
-#     Shift_d = tvm.placeholder((out_c_d,), name='Shift_d')
-#     Scale_1 = tvm.placeholder((out_c_1,), name='Scale_1')
-#     Shift_1 = tvm.placeholder((out_c_1,), name='Shift_1')
-
-
-#     # declare
-#     if layout == "NCHW":
-#         Conv_d = topi.nn.depthwise_conv2d_nchw(Input, Kernel_d, stride=[stride_h_d, stride_w_d], padding=padding_depthwise, dilation=1, out_dtype=dtype)
-#         ScaleShift_d = topi.nn.scale_shift_nchw(Conv_d, Scale_d, Shift_d)
-#         Relu_d= topi.nn.relu(ScaleShift_d)
-#         Conv_1 = topi.nn.conv2d(Relu_d, Kernel_1, strides=1, padding=0, dilation=1, layout="NCHW", out_dtype=dtype)
-#         ScaleShift_1 = topi.nn.scale_shift_nchw(Conv_1, Scale_1, Shift_1)
-#     else: # NHWC
-#         Conv_d = topi.nn.depthwise_conv2d_nhwc(Input, Kernel_d, stride=[stride_h_d, stride_w_d], padding=padding_depthwise, dilation=1, out_dtype=dtype)
-#         ScaleShift_d = topi.nn.scale_shift_nhwc(Conv_d, Scale_d, Shift_d)
-#         Relu_d= topi.nn.relu(ScaleShift_d)
-#         Conv_1 = topi.nn.conv2d(Relu_d, Kernel_1, strides=1, padding=0, dilation=1, layout="NHWC", out_dtype=dtype)
-#         ScaleShift_1 = topi.nn.scale_shift_nhwc(Conv_1, Scale_1, Shift_1)
-    
-#     Relu_1 = topi.nn.relu(ScaleShift_1)
-
-#     # Prepare pod type for test data closure
-#     dtype = Input.dtype
-#     input_shape = get_const_tuple(Input.shape)
-#     kernel_d_shape = get_const_tuple(Kernel_d.shape)
-#     scale_d_shape = get_const_tuple(Scale_d.shape)
-#     shift_d_shape = get_const_tuple(Shift_d.shape)
-#     scale_shift_d_shape = get_const_tuple(ScaleShift_d.shape)
-#     kernel_1_shape = get_const_tuple(Kernel_1.shape)
-#     scale_1_shape = get_const_tuple(Scale_1.shape)
-#     shift_1_shape = get_const_tuple(Shift_1.shape)
-#     scale_shift_1_shape = get_const_tuple(ScaleShift_1.shape)
-
-#     # @memoize("depthwise_1by1_fused")
-#     def get_ref_data():
-#         input_np = np.random.uniform(size=input_shape).astype(dtype)
-
-#         kernel_d_np = np.random.uniform(size=kernel_d_shape).astype(dtype)
-#         scale_d_np = np.random.uniform(size=scale_d_shape).astype(dtype)
-#         shift_d_np = np.random.uniform(size=shift_d_shape).astype(dtype)
-
-#         kernel_1_np = np.random.uniform(size=kernel_1_shape).astype(dtype)
-#         scale_1_np = np.random.uniform(size=scale_1_shape).astype(dtype)
-#         shift_1_np = np.random.uniform(size=shift_1_shape).astype(dtype)
-
-#         # correctness with scipy
-#         if layout == "NCHW":
-#             # depthwise
-#             conv_d_np = topi.testing.depthwise_conv2d_python_nchw(
-#                 input_np, kernel_d_np, stride=stride_depthwise, padding=padding_depthwise)
-#             scale_shift_d_np = np.zeros(shape=scale_shift_d_shape)
-#             for c in range(out_c_d):
-#                 scale_shift_d_np[:,c,:,:] = conv_d_np[:,c,:,:] * scale_d_np[c] + shift_d_np[c]
-#                 relu_d_np = np.maximum(scale_shift_d_np, 0)
-#             # 1by1
-#             conv_1_np = topi.testing.conv2d_nchw_python(relu_d_np, kernel_1_np, 1, 0)
-#             scale_shift_1_np = np.zeros(shape=scale_shift_1_shape)
-#             for c in range(out_c_1):
-#                 scale_shift_1_np[:,c,:,:] = conv_1_np[:,c,:,:] * scale_1_np[c] + shift_1_np[c]
-#                 relu_1_np = np.maximum(scale_shift_1_np, 0)
-#         else: # NHWC
-#             # depthwise
-#             conv_d_np = topi.testing.depthwise_conv2d_python_nhwc(
-#                 input_np, kernel_d_np, stride=stride_depthwise, padding=padding_depthwise)
-#             scale_shift_d_np = np.zeros(shape=scale_shift_d_shape)
-#             for c in range(out_c_d):
-#                 scale_shift_d_np[:,:,:,c] = conv_d_np[:,:,:,c] * scale_d_np[c] + shift_d_np[c]
-#                 relu_d_np = np.maximum(scale_shift_d_np, 0)
-#             # 1by1
-#             conv_1_np = topi.testing.conv2d_nhwc_python(relu_d_np, kernel_1_np, 1, 0)
-#             scale_shift_1_np = np.zeros(shape=scale_shift_1_shape)
-#             for c in range(out_c_1):
-#                 scale_shift_1_np[:,:,:,c] = conv_1_np[:,:,:,c] * scale_1_np[c] + shift_1_np[c]
-#                 relu_1_np = np.maximum(scale_shift_1_np, 0)
-
-#         return (input_np, kernel_d_np, scale_d_np, shift_d_np, 
-#                 kernel_1_np, scale_1_np, shift_1_np,
-#                 conv_d_np, scale_shift_d_np, relu_d_np,
-#                 conv_1_np, scale_shift_1_np, relu_1_np)
-#     (input_np, kernel_d_np, scale_d_np, shift_d_np,
-#                 kernel_1_np, scale_1_np, shift_1_np,
-#                 conv_d_np, scale_shift_d_np, relu_d_np,
-#                 conv_1_np, scale_shift_1_np, relu_1_np) = get_ref_data()
-
-#     def check_device(device):
-#         ctx = tvm.context(device, 0)
-#         if not ctx.exist:
-#             print("Skip because %s is not enabled" % device)
-#             return
-#         print("Running on target: %s" % device)
-#         with tvm.target.create(device):
-#             # schedule
-#             s = schedule_depthwise_1by1_fused([Relu_1], layout)
-
-#         input_tvm = tvm.nd.array(input_np, ctx)
-#         kernel_d_tvm = tvm.nd.array(kernel_d_np, ctx)
-#         scale_d_tvm = tvm.nd.array(scale_d_np, ctx)
-#         shift_d_tvm = tvm.nd.array(shift_d_np, ctx)
-#         kernel_1_tvm = tvm.nd.array(kernel_1_np, ctx)
-#         scale_1_tvm = tvm.nd.array(scale_1_np, ctx)
-#         shift_1_tvm = tvm.nd.array(shift_1_np, ctx)
-
-#         relu_1_tvm = tvm.nd.array(np.zeros(get_const_tuple(Relu_1.shape), dtype=Relu_1.dtype), ctx)
-#         with tvm.build_config(auto_unroll_max_step=1400,
-#                               unroll_explicit=(device != "cuda")):
-#             func = tvm.build(s, [Input,
-#                 Kernel_d, Scale_d, Shift_d,
-#                 Kernel_1, Scale_1, Shift_1,
-#                 Relu_1], target=device, target_host="llvm")
-#             func(input_tvm,
-#                 kernel_d_tvm, scale_d_tvm, shift_d_tvm,
-#                 kernel_1_tvm, scale_1_tvm, shift_1_tvm,
-#                 relu_1_tvm)
-#             np.testing.assert_allclose(relu_1_tvm.asnumpy(), relu_1_np, rtol=1e-5)
-
-#     check_device("cuda")
-
 def test_depthwise_conv2d():
     # depthwise_1by1_fused(1, 32, 112, 1, 3, 1, 32, layout="NCHW")
 
-    default_schedule = True
-    depthwise_conv2d_with_workload_nhwc(1, 32, 112, 1, 3, 1, default_schedule=default_schedule) # 51.62us, cudnn 93.53us
+    default_schedule = False
+    # depthwise_conv2d_with_workload_nhwc(1, 32, 112, 1, 3, 1, default_schedule=default_schedule) # 51.62us, cudnn 93.53us
     # depthwise_conv2d_with_workload_nhwc_auto(1, 32, 112, 1, 3, 1, default_schedule=default_schedule) # 51.05us,
     # conv2d_nhwc(1, 32, 112, 32, 1, 1, default_schedule=default_schedule) # 53.023us, cudnn 49.10us
     # conv2d_nhwc_auto(1, 32, 112, 32, 1, 1, default_schedule=default_schedule) # 52.68us
@@ -478,7 +335,7 @@ def test_depthwise_conv2d():
 
     # depthwise_conv2d_with_workload_nhwc(1, 128, 56, 1, 3, 1, default_schedule=default_schedule) # 45.26us, cudnn 61.90us
     # depthwise_conv2d_with_workload_nhwc_auto(1, 128, 56, 1, 3, 1, default_schedule=default_schedule) # 45.08us,
-    # conv2d_nhwc(1, 128, 56, 128, 1, 1, default_schedule=default_schedule) # 132.06us, cudnn 70.42us
+    conv2d_nhwc(1, 128, 56, 128, 1, 1, default_schedule=default_schedule) # 132.06us, cudnn 70.42us
     # conv2d_nhwc_auto(1, 128, 56, 128, 1, 1, default_schedule=default_schedule) # 133.17us
 
 

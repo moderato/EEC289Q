@@ -2,5 +2,7 @@
 __pycache__/
 *.log
 *.npy
-kernel.cu
 kernel.cuh
+testbed/*
+!testbed/cuda_testbed.cu
+!testbed/*.cuh

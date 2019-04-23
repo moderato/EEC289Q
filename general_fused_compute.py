@@ -17,7 +17,7 @@ class FilterConstructor:
 		self.dilation = dilation
 		self.NHWC_transpose = NHWC_transpose
 
-def fused_convs(input_data, filters):
+def fused_convs(input_data, filters, resnet_block=False):
 
 	out_dtype = input_data.dtype
 
@@ -121,6 +121,18 @@ def fused_convs(input_data, filters):
 
 		nodes.append(Output)
 		params.append(Filter)
+
+	if resnet_block:
+		First = nodes[0]
+		Last = nodes[-1]
+		assert (first.shape == last.shape)
+		Output = tvm.compute(
+			(batch, out_height, out_width, out_channel),
+			lambda b, i, j, c: tvm.sum(
+				(First[b, i, j, c].astype(out_dtype) + 
+				(Last[b, i, j, c]).astype(out_dtype))),
+			name='ElementwiseAddOutput_{}'.format(depthwise_count), tag="elem_nhwc")
+		nodes.append(Output)
 
 	params.append(nodes[-1]) # Final output
 	return nodes, params
