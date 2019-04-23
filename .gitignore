@@ -6,3 +6,4 @@ kernel.cuh
 testbed/*
 !testbed/cuda_testbed.cu
 !testbed/*.cuh
+!testbed/Makefile
