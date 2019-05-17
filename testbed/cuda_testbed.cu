@@ -1,7 +1,7 @@
 #include <iostream>
 #include <string>
 #include "cnpy.h"
-#include "kernel_depth_conv.cuh"
+#include "warp_multiple_output.cuh"
 
 using namespace std;
 
@@ -15,8 +15,9 @@ int main(int argc, char const *argv[])
 	// int H = 14, W = 14, C = 512;
 
 	// Block and grid size
-	dim3 block(32, 4, 1);
-	int block_x = (int)(C / 32) * (int)(H / tile) * (int)(W / tile);
+	int threadx_num = 32;
+	dim3 block(threadx_num, tile * tile, 1);
+	int block_x = (int)(C / 32) * (int)(H / tile) * (int)(W / tile) / 4; // / 2 or 4 for 64 outputs per 32 threadx
 	dim3 grid(block_x, 1, 1);
 	// int block_x = (int)(C / 32), block_y = (int)(H / tile) * (int)(W / tile);
 	// dim3 grid(block_x, block_y, 1);
@@ -60,7 +61,7 @@ int main(int argc, char const *argv[])
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
 	float ms = 0;
-	int repeatition = 10;
+	int repeatition = 1000;
 
 	int *d_data, h_data = 0;
 	cudaMalloc((void **)&d_data, sizeof(int));
@@ -89,10 +90,14 @@ int main(int argc, char const *argv[])
     float *result;
     result = (float*)malloc(output_shape * sizeof(float));
     cudaMemcpy(result, output, output_shape * sizeof(float), cudaMemcpyDeviceToHost);
-    // for(int i = 0; i < output_shape; i++) {
-    // 	// printf("%d, %f, %lf\n", i, result[i], tmp2[i]);
-    // 	assert(abs(result[i] - (float)tmp2[i]) < 1e-4);
-    // }
+    int count = 0;
+    for(int i = 0; i < output_shape; i++) {
+    	// printf("%d, %f, %lf\n", i, result[i], tmp2[i]);
+    	// assert(abs(result[i] - (float)tmp2[i]) < 1e-4);
+    	if (abs(result[i] - (float)tmp2[i]) > 1e-4)
+    		count++;
+    }
+    printf("Wrong count: %d\n", count);
 
     cudaFree(input);
     cudaFree(filter_d);

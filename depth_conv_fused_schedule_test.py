@@ -123,7 +123,7 @@ def schedule_depth_conv_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
     F_1 = params[2]
 
     output_tile_size = 2
-    num_thread_x = 32 # 64 if tvm.ir_pass.Simplify(PaddedInput.shape[3]).value >= 64 else 32
+    num_thread_x = 64 # 64 if tvm.ir_pass.Simplify(PaddedInput.shape[3]).value >= 64 else 32
     num_thread_y = output_tile_size * output_tile_size
     # num_vthread_x = 3
     # num_vthread_y = 3

@@ -8,7 +8,9 @@ extern "C" __global__ void DepthConvFused_2_kernel0( float* __restrict__ Input, 
   Conv2dOutput_0_local[0] = 0.000000e+00f;
   for (int rc_outer_v = 0; rc_outer_v < 4; ++rc_outer_v) {
     __syncthreads();
-    ((__shared__ float4*)(PaddedInput_0_shared + (((((int)threadIdx.y) * 128) + ((((int)threadIdx.x) / 8) * 32)) + ((((int)threadIdx.x) % 8) * 4))))[0] = ((((((1 - ((int)threadIdx.y)) <= ((((int)blockIdx.x) / 112) * 2)) && (((((int)blockIdx.x) / 112) * 2) < (57 - ((int)threadIdx.y)))) && ((1 - (((int)threadIdx.x) / 8)) <= (((((int)blockIdx.x) / 4) % 28) * 2))) && ((((((int)blockIdx.x) / 4) % 28) * 2) < (57 - (((int)threadIdx.x) / 8)))) ? (( float4*)(Input + ((((((((((int)blockIdx.x) / 112) * 14336) + (((((int)blockIdx.x) / 4) % 28) * 256)) + (((int)threadIdx.y) * 7168)) + ((((int)threadIdx.x) / 8) * 128)) + ((((int)threadIdx.x) % 8) * 4)) + (rc_outer_v * 32)) - 7296)))[0] : make_float4(0.000000e+00f, 0.000000e+00f, 0.000000e+00f, 0.000000e+00f));
+    for (int ax1 = 0; ax1 < 4; ++ax1) {
+      PaddedInput_0_shared[(((((int)threadIdx.y) * 32) + ((int)threadIdx.x)) + (ax1 * 128))] = ((((((1 - ax1) <= ((((int)blockIdx.x) / 112) * 2)) && (((((int)blockIdx.x) / 112) * 2) < (57 - ax1))) && ((1 - ((int)threadIdx.y)) <= (((((int)blockIdx.x) / 4) % 28) * 2))) && ((((((int)blockIdx.x) / 4) % 28) * 2) < (57 - ((int)threadIdx.y)))) ? Input[((((((((((int)blockIdx.x) / 112) * 14336) + (((((int)blockIdx.x) / 4) % 28) * 256)) + (((int)threadIdx.y) * 128)) + ((int)threadIdx.x)) + (rc_outer_v * 32)) + (ax1 * 7168)) - 7296)] : 0.000000e+00f);
+    }
     DepthwiseConv2dOutput_0_local[0] = 0.000000e+00f;
     __syncthreads();
     for (int ry = 0; ry < 3; ++ry) {
@@ -18,8 +20,9 @@ extern "C" __global__ void DepthConvFused_2_kernel0( float* __restrict__ Input, 
     }
     __syncthreads();
     PaddedInput_0_shared[((((int)threadIdx.y) * 32) + ((int)threadIdx.x))] = DepthwiseConv2dOutput_0_local[0];
-    for (int ax2_outer_outer = 0; ax2_outer_outer < 2; ++ax2_outer_outer) {
-      ((__shared__ float4*)(Conv2dFilter_1_shared + ((((((int)threadIdx.y) * 128) + ((((int)threadIdx.x) / 8) * 32)) + ((((int)threadIdx.x) % 8) * 4)) + (ax2_outer_outer * 512))))[0] = (( float4*)(Conv2dFilter_1 + (((((((((int)blockIdx.x) % 4) * 32) + (((int)threadIdx.y) * 512)) + ((((int)threadIdx.x) / 8) * 128)) + ((((int)threadIdx.x) % 8) * 4)) + (rc_outer_v * 4096)) + (ax2_outer_outer * 2048))))[0];
+#pragma unroll
+    for (int ax0_ax1_fused_ax2_outer_fused = 0; ax0_ax1_fused_ax2_outer_fused < 8; ++ax0_ax1_fused_ax2_outer_fused) {
+      Conv2dFilter_1_shared[(((((int)threadIdx.y) * 32) + ((int)threadIdx.x)) + (ax0_ax1_fused_ax2_outer_fused * 128))] = Conv2dFilter_1[((((((((int)blockIdx.x) % 4) * 32) + (((int)threadIdx.y) * 128)) + ((int)threadIdx.x)) + (rc_outer_v * 4096)) + (ax0_ax1_fused_ax2_outer_fused * 512))];
     }
     Conv2dOutput_0_local_rf[0] = 0.000000e+00f;
     __syncthreads();
