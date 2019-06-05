@@ -29,7 +29,7 @@ void cudnnCall(cudnnHandle_t cudnn_handle,
                int output_height, int output_width, int output_channel,
                bool depthwise) {
     int group_count = depthwise ? input_channel : 1;
-    std::cout << "Depthwise? " << depthwise << std::endl;
+    // std::cout << "Depthwise? " << depthwise << std::endl;
 
     // std::cout << input_height << ", " << input_width << ", " << input_channel << std::endl;
     // std::cout << kernel_height << ", " << kernel_width << ", " << kernel_in_channel << ", " << kernel_out_channel_or_multiplier << std::endl;
@@ -158,14 +158,14 @@ int main(int argc, const char* argv[]) {
 
   // filenames
   std::string input_name = "../npy/depth_input_1_" + std::to_string(input_height) + "_" + std::to_string(input_width) + "_" + std::to_string(input_channel) + ".npy";
-  std::string kernel_d_name = "../npy/depth_weight_" + std::to_string(kernel_d_height) + "_" + std::to_string(kernel_d_width) + "_" + std::to_string(kernel_d_in_channel) + "_" + std::to_string(kernel_d_out_multiplier) + ".npy";
+  std::string kernel_d_name = "../npy/depth_weight_" + std::to_string(kernel_d_height) + "_" + std::to_string(kernel_d_width) + "_" + std::to_string(kernel_d_in_channel) + "_" + std::to_string(kernel_d_out_multiplier) + "_NCHW.npy";
   std::string inter_name;
   if (first) {
     inter_name = "../npy/depth_output_1_" + std::to_string(inter_height) + "_" + std::to_string(inter_width) + "_" + std::to_string(inter_channel) + ".npy";
   } else {
     inter_name = "../npy/conv_input_1_" + std::to_string(inter_height) + "_" + std::to_string(inter_width) + "_" + std::to_string(inter_channel) + ".npy";
   }
-  std::string kernel_1_name = "../npy/conv_weight_" + std::to_string(kernel_1_height) + "_" + std::to_string(kernel_1_width) + "_" + std::to_string(kernel_1_in_channel) + "_" + std::to_string(kernel_1_out_channel) + ".npy";
+  std::string kernel_1_name = "../npy/conv_weight_" + std::to_string(kernel_1_height) + "_" + std::to_string(kernel_1_width) + "_" + std::to_string(kernel_1_in_channel) + "_" + std::to_string(kernel_1_out_channel) + "_NCHW.npy";
   std::string output_name = "../npy/conv_output_1_" + std::to_string(output_height) + "_" + std::to_string(output_width) + "_" + std::to_string(output_channel) + ".npy";
 
   std::cout << input_name << std::endl << kernel_d_name << std::endl << inter_name << std::endl << kernel_1_name << std::endl << output_name << std::endl;
@@ -218,7 +218,7 @@ int main(int argc, const char* argv[]) {
     // }
   }
 
-  for (int i = 0; i < 1; i++) {
+  for (int i = 0; i < 5; i++) {
     // create handles
     cudnnHandle_t cudnn_handle;
     cudnnCreate(&cudnn_handle);

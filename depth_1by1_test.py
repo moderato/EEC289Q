@@ -76,7 +76,8 @@ def depthwise_conv2d_with_workload_nhwc(batch, in_channel, in_size, channel_mult
         if default_schedule:
             np.save(filename + "depth_input_%d_%d_%d_%d" % (input_np.shape[0], input_np.shape[2], input_np.shape[3], input_np.shape[1]), input_np.transpose((0,2,3,1)))
             # np.save(filename + "depth_weight_%d_%d_%d_%d" % filter_np.shape, filter_np)
-            np.save(filename + "depth_weight_%d_%d_%d_%d" % (filter_np.shape[3], filter_np.shape[2], filter_np.shape[0], filter_np.shape[1]), filter_np) # For cudnn benchmark
+            np.save(filename + "depth_weight_%d_%d_%d_%d_NCHW" % (filter_np.shape[2], filter_np.shape[3], filter_np.shape[0], filter_np.shape[1]), filter_np) # For cudnn benchmark, IOHW named as HWIO
+            np.save(filename + "depth_weight_%d_%d_%d_%d" % (filter_np.shape[2], filter_np.shape[3], filter_np.shape[0], filter_np.shape[1]), filter_np.transpose((2,3,0,1))) # For cut benchmark
             np.save(filename + "depth_output_%d_%d_%d_%d" % (output_np.shape[0], output_np.shape[2], output_np.shape[3], output_np.shape[1]), output_np.transpose((0,2,3,1)))
         else:
             np.save(filename + "depth_input_%d_%d_%d_%d" % input_np.shape, input_np)
@@ -145,7 +146,6 @@ def depthwise_conv2d_with_workload_nhwc(batch, in_channel, in_size, channel_mult
 
     check_device("cuda")
     return output_np
-
 
 def depthwise_conv2d_with_workload_nhwc_auto(batch, in_channel, in_size, channel_multiplier, kernel, stride, padding="SAME", dtype="float32", default_schedule=False):
     in_width = in_height = in_size
@@ -260,6 +260,8 @@ def conv2d_nhwc(batch, in_channel, in_size, num_filter, kernel, stride, padding=
         else:
             a_np = np.random.uniform(size=a_shape).astype(dtype)
         w_np = np.random.uniform(size=w_shape).astype(dtype)
+        print("^^^^^^^^^^^^^")
+        print(w_np[0:2,0:128,0,0])
         # Borrow NCHW for cudnn
         b_np = topi.testing.conv2d_nchw_python(a_np, w_np, stride, padding) if default_schedule else topi.testing.conv2d_nhwc_python(a_np, w_np, stride, padding)
         b_np = np.float32(b_np)
@@ -272,15 +274,29 @@ def conv2d_nhwc(batch, in_channel, in_size, num_filter, kernel, stride, padding=
             filename += "%s/" % model_name
 
         if default_schedule:
+            tmp = w_np.transpose((2,3,1,0))
             np.save(filename + "conv_input_%d_%d_%d_%d" % (a_np.shape[0], a_np.shape[2], a_np.shape[3], a_np.shape[1]), a_np.transpose((0,2,3,1)))
-            # np.save(filename + "depth_weight_%d_%d_%d_%d" % filter_np.shape, filter_np)
-            np.save(filename + "conv_weight_%d_%d_%d_%d" % (w_np.shape[3], w_np.shape[2], w_np.shape[0], w_np.shape[1]), w_np) # For cudnn benchmark
+            np.save(filename + "conv_weight_%d_%d_%d_%d_NCHW" % (w_np.shape[2], w_np.shape[3], w_np.shape[1], w_np.shape[0]), w_np) # For cudnn benchmark, OIHW named as HWIO
+            np.save(filename + "conv_weight_%d_%d_%d_%d" % (w_np.shape[2], w_np.shape[3], w_np.shape[1], w_np.shape[0]), tmp) # For cutlass benchmark, OIHW to HWIO
             np.save(filename + "conv_output_%d_%d_%d_%d" % (b_np.shape[0], b_np.shape[2], b_np.shape[3], b_np.shape[1]), b_np.transpose((0,2,3,1)))
+            # print("****")
+            # print((a_np.transpose((0,2,3,1)))[0,0,0:2,0:128])
+            # print("****")
+            # print(w_np[0:2,0:128,0,0])
+            # print("****")
+            # print(tmp[0,0,0:2,0:128])
+            # print("****")
+            # print(b_np.transpose((0,2,3,1))[0,0,0:2,0:128])
         else:
             np.save(filename + "conv_input_%d_%d_%d_%d" % a_np.shape, a_np)
-            # np.save(filename + "depth_weight_%d_%d_%d_%d" % filter_np.shape, filter_np)
             np.save(filename + "conv_weight_%d_%d_%d_%d" % w_np.shape, w_np.transpose((3,2,0,1))) # For cudnn benchmark
             np.save(filename + "conv_output_%d_%d_%d_%d" % b_np.shape, b_np)
+    # print("****")
+    # a = np.load(filename + "conv_weight_%d_%d_%d_%d_NCHW.npy" % (w_np.shape[2], w_np.shape[3], w_np.shape[1], w_np.shape[0]))
+    # b = np.load(filename + "conv_weight_%d_%d_%d_%d.npy" % (w_np.shape[2], w_np.shape[3], w_np.shape[1], w_np.shape[0]))
+    # print(a[0,0,0,0:2], b[0,0,0,0:2])
+    # print(np.array_equal(a, b))
+    # print("****")
 
     def check_device(device):
         if not tvm.module.enabled(device):

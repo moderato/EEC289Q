@@ -7,3 +7,10 @@ testbed/*
 !testbed/cuda_testbed.cu
 !testbed/*.cuh
 !testbed/Makefile
+cutlass/*
+!cutlass/pipeline.cu
+!cutlass/*.cuh
+!cutlass/Makefile
+cudnn/*
+!cudnn/cudnn_bench.cu
+!cudnn/Makefile
