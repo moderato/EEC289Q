@@ -1,5 +1,8 @@
 #define FILTER_H 3
 #define FILTER_W 3
+#define BUFFER_STRIDE 2 // The stride the buffer moves each time
+#define STEP_OUTPUT_TILE_H 2
+#define STEP_OUTPUT_TILE_W 2 // e.g. EACH BLOCK EACH STEP reads a 4x4xC_stride chunk and computes a 2x2xC_stride chunk in stage 1
 
 __device__ void getSharedHW(bool isTall, int& h, int& w) {
   // 2x2 warps over H and W, 16 threads over C dimension
@@ -39,8 +42,8 @@ __device__ void depthwiseConvSingleNum(float* Conv2dFilter_1_shared,
 #pragma unroll
   for (int ry = 0; ry < FILTER_H; ++ry) {
     for (int rx = 0; rx < FILTER_W; ++rx) {
-      int w = start_w + rx + threadIdx.y % 2;
-      int h = start_h + ry + threadIdx.y / 2;
+      int w = start_w + rx + threadIdx.y % STEP_OUTPUT_TILE_W;
+      int h = start_h + ry + threadIdx.y / STEP_OUTPUT_TILE_W;
       int input_idx = threadIdx.x + 32 * ((w % 4) + (h % 4) * 4);
 
       DepthwiseConv2dOutput_0_local[0] += (
@@ -108,7 +111,7 @@ extern "C" __global__ void DepthConvFused_2_kernel0(const float* Input,
 
     ///////////// Preprocessing /////////////
     // Load filter to RMem
-#pragma unroll
+    #pragma unroll
     for (int ry = 0; ry < FILTER_H; ++ry) {
       for (int rx = 0; rx < FILTER_W; ++rx) {
         filter[ry * FILTER_W + rx] = DepthwiseFilter_1[thx + (rc_outer_v * C_stride) + (ry * C * FILTER_W) + (rx * C)];
@@ -193,7 +196,6 @@ extern "C" __global__ void DepthConvFused_2_kernel0(const float* Input,
       
       bool isTall = loop % 2;
       int start_h, start_w, shared_idx;
-
 
       if (loop == 0) {
         start_h = 0, start_w = 0;

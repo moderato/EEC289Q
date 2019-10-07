@@ -5,6 +5,8 @@
 
 using namespace std;
 
+#define BLOCK_Y_SIZE 4 // Fix this value in a foreseeable future
+
 int main(int argc, char const *argv[])
 {
 	// int N = 1, output_tile_H = 2, output_tile_W = 2;
@@ -17,7 +19,7 @@ int main(int argc, char const *argv[])
 
 	// Block and grid size
 	int threadx_num = 32, C_stride = 32;
-	dim3 block(threadx_num, 4, 1);
+	dim3 block(threadx_num, BLOCK_Y_SIZE, 1);
 
 	// 1D grid
 	// int block_x = (int)(H / output_tile_H) * (int)(W / output_tile_W), block_y = 1;
