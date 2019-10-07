@@ -4,6 +4,8 @@
 // CUTLASS includes
 #include "cutlass/tile_iterator.h"
 #include "cutlass/tile_traits_standard.h"
+#include "cutlass/gemm/thread_multiply_add.h"
+#include "cutlass/gemm/gemm_shared_tile.h"
 
 //
 // CUTLASS utility includes
@@ -64,46 +66,29 @@ extern "C" __global__ void DepthConvFused_2_kernel0( const float* Input, const f
     // A: intermediate
     // B: Conv2dFilter_1_shared
 
-    /// Concept specifying traits of a tile in memory
-    // struct TileTraits {
+    //////////////////////////////////////////////////////////////////////////////////////////////////
+    ////  Load Conv2dFilter_1 (global) to B (shared) (To be refactored to GemmGlobalIteratorAb)
+    //////////////////////////////////////////////////////////////////////////////////////////////////
 
-    //   /// Overall shape of tile
-    //   typedef cutlass::Shape<1, 32, 8, 4> Tile;
-
-    //   /// Distance along each dimension of accesses
-    //   typedef cutlass::Shape<1, 16, 1, 1> Delta;
-
-    //   /// Number of memory accesses performed by each thread
-    //   typedef cutlass::Shape<1, 2, 1, 1> Iterations;
-
-    //   /// Offset function - maps each thread to a unique starting offset within the 4D tile
-    //   struct ThreadOffset {
-    //     CUTLASS_DEVICE cutlass::Coord<4> operator()() const {
-    //       return cutlass::make_Coord(
-    //         0,                              // depth "D" dimension
-    //         threadIdx.x / 8 + threadIdx.y * 4,   // horisontal "H" dimension - first strided dimension
-    //         threadIdx.x % 8,   // vertical "W" dimension - contiguous dimension
-    //         0
-    //       );
-    //     }
-    //   };
-    // };
-    typedef cutlass::Shape<1, 32, 32> Tile;
-    typedef cutlass::TileTraitsStandard<Tile, 128> TileTraits;
+    // Load a (K = 32, M = 32) tile with 128 threads
+    typedef cutlass::Shape<1, 32, 32> Tile_32x32;
+    typedef cutlass::TileTraitsStandard<Tile_32x32, 128> TileTraits;
 
     typedef cutlass::TileLoadIterator<
-        TileTraits,                         // the Traits type, defines shape/distribution of accesses
+        TileTraits,                     // the Traits type, defines shape/distribution of accesses
         float,                          // elements are of type float
-        cutlass::IteratorAdvance::kH,   // post-increment accesses advance in strided (as opposed to
+        // kW = row major, kH = column major
+        cutlass::IteratorAdvance::kW,   // post-increment accesses advance in strided (as opposed to
                                         //     contiguous dimension 
         cutlass::MemorySpace::kGlobal   // iterator loads from global memory 
         > TileLoadIterator;
 
     // Defines a tile store iterator
     typedef cutlass::TileStoreIterator<
-        TileTraits,                         // the Traits type, defines shape/distribution of accesses
+        TileTraits,                     // the Traits type, defines shape/distribution of accesses
         float,                          // elements are of type float
-        cutlass::IteratorAdvance::kH,   // post-increment accesses advance in strided (as opposed to
+        // kW = row major, kH = column major
+        cutlass::IteratorAdvance::kW,   // post-increment accesses advance in strided (as opposed to
                                         //     contiguous) dimension
         cutlass::MemorySpace::kShared   // iterator stores into shared memory
         > TileStoreIterator;
@@ -120,7 +105,11 @@ extern "C" __global__ void DepthConvFused_2_kernel0( const float* Input, const f
     // input matrix and TileStoreIterator accesses the output matrix. The strides are set
     // identically since the data is being stored in the same way as it is loaded (column-major
     // mapping).
-    load_params.initialize(Conv2dFilter_1 + 4096 * rc_outer_v, 4096, 128, 1);
+    //////
+    // load_params.initialize(input, M*K, M, 1);
+    // store_params.initialize(output, M*K, M, 1);
+    //////
+    load_params.initialize(Conv2dFilter_1 + 4096 * rc_outer_v, 1024, 32, 1);
     store_params.initialize(Conv2dFilter_1_shared, 1024, 32, 1);
    
     // Constructing the tile load and store iterators, and the predicates vector
@@ -129,49 +118,58 @@ extern "C" __global__ void DepthConvFused_2_kernel0( const float* Input, const f
     PredicateVector predicates;
 
     // Initializing the predicates with bounds set to <1, K, M>. This protects out-of-bounds loads.
-    load_iterator.initialize_predicates(predicates.begin(), cutlass::make_Coord(1, 128, 128));
+    load_iterator.initialize_predicates(predicates.begin(), cutlass::make_Coord(1, 32, 32));
 
     // The fragment in which the elements are loaded into and stored from.
-    typename TileLoadIterator::Fragment fragment;
+    typename TileLoadIterator::Fragment fragment_conv2d_filter;
 
     // Loading a tile into a fragment and advancing to the next tile's position
-    load_iterator.load_post_increment(fragment, predicates.begin());
+    load_iterator.load_post_increment(fragment_conv2d_filter, predicates.begin());
     // Storing a tile from fragment and advancing to the next tile's position
-    store_iterator.store_post_increment(fragment);
+    store_iterator.store_post_increment(fragment_conv2d_filter);
+    //////////////////////////////////////////////////////////////////////////////////////////////////
 
-    template <
-      typename Shape,
-      typename ScalarA,
-      typename ScalarB,
-      typename ScalarC>
-    struct GemmMultiplyAdd {
-      /// Multiply: D = A*B + C
-      inline __device__ void multiply_add(
-      cutlass::Fragment<ScalarA, Shape::kW> const & A,
-      cutlass::Fragment<ScalarB, Shape::kH> const & B,
-      cutlass::Accumulators const & C,
-      cutlass::Accumulators & D) {
-        // Perform M-by-N-by-1 matrix product using FMA
-        for (int j = 0; j < Shape::kH; ++j) {
-          for (int i = 0; i < Shape::kW; ++i) {
-            D.scalars[j * Shape::kW + i] =
-            // multiply
-            A.scalars[i] * B.scalars[j] +
-            // add
-            C.scalars[j * Shape::kW + i];
-          }
-        }
-      }
-    };
 
-    typedef GemmMultiplyAdd<
-      
+    //////////////////////////////////////////////////////////////////////////////////////////////////
+    ////  Do GEMM with A and B in thread level
+    //////////////////////////////////////////////////////////////////////////////////////////////////
+
+    // A
+    typedef cutlass::Shape<1, 4, 8> WarpTile;
+    typedef cutlass::Shape<1, 4> Warps;
+    typedef cutlass::Shape<1, 4, 8> ThreadsPerWarp;
+    typedef cutlass::Shape<1, 1, 1> InstShape;
+    typedef GemmSharedLoadTileATraits<
       float,
-      float,
+      WarpTile,       // output warp size: a warp calculates 1x4x8
+      Warps,          // warps: 1x4 warps in total
+      ThreadsPerWarp, // 
+      InstShape       // doubted!!
+    > IntermediateDataIterator; // Load intermediate data from shared mem
+
+    // B
+    typedef cutlass::Shape<1, 4, 8> WarpTile;
+    typedef cutlass::Shape<1, 4> Warps;
+    typedef cutlass::Shape<1, 4, 8> ThreadsPerWarp;
+    typedef cutlass::Shape<1, 1, 1> InstShape;
+    typedef GemmSharedLoadTileBTraits<
+      Conv2dFilter_1_shared, // ptr
+      WarpTile,              // output warp size: a warp calculates 1x4x8
+      Warps,                 // warps: 1x4 warps in total
+      ThreadsPerWarp,        // 
+      InstShape              // doubted!!
+    > Conv2dFilterDataIterator; // Load intermediate data from shared mem
+    
+
+    typedef cutlass::Shape<4, 8, 8> ThreadTile;
+
+    typedef ThreadMultiplyAdd<
+      ThreadTile, 
+      32,
+      float, 
+      float, 
       float
     > GMA;
-
-
 
   }
 

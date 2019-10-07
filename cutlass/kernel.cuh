@@ -4,10 +4,13 @@
 // Defines cutlass::gemm::SgemmTraits, the structural components for single-precision GEMM
 #include "cutlass/gemm/sgemm_traits.h"
 
+// Block swizzle
+#include "cutlass/gemm/threadblock_swizzle.h"
+
 #pragma warning( disable : 4503)
 
 /// Define a CUTLASS GEMM template and launch a GEMM kernel.
-cudaError_t CutlassSgemmNN(
+cudaError_t CutlassSgemmTT(
   int M,
   int N,
   int K,
@@ -33,14 +36,117 @@ cudaError_t CutlassSgemmNN(
   // default template arguments. See `cutlass/gemm/gemm_traits.h` for more details.
   //
 
-  typedef cutlass::gemm::SgemmTraits<
-    cutlass::MatrixLayout::kRowMajor,   // layout of A matrix
-    cutlass::MatrixLayout::kRowMajor,   // layout of B matrix
-    cutlass::Shape<8, 128, 128>         // threadblock tile size
-  > GemmTraits;
+
+  // typedef cutlass::gemm::SgemmTraits<
+  //   cutlass::MatrixLayout::kRowMajor,   // layout of A matrix
+  //   cutlass::MatrixLayout::kRowMajor,   // layout of B matrix
+  //   cutlass::Shape<8, 128, 128>         // threadblock tile size
+  // > GemmTraits;
+
+  // typedef cutlass::gemm::SgemmTraits<
+  //   /// The layout for A.
+  //   cutlass::MatrixLayout::kRowMajor,
+  //   /// The layout for B.
+  //   cutlass::MatrixLayout::kRowMajor,
+  //   /// The output tile.
+  //   cutlass::Shape<8, 128, 128>,
+  //   /// The functor to use in the epilogue.
+  //   cutlass::gemm::LinearScaling<float>,
+  //   /// Tile size for thread-level GEMM (K-by-N-by-M)
+  //   cutlass::Shape<8, 8, 8>,
+  //   /// The number of floats loaded in one LDG for A.
+  //   1,
+  //   /// The number of floats loaded in one LDG for B.
+  //   1,
+  //   /// The index.
+  //   int,
+  //   /// The SGEMM config.
+  //   cutlass::gemm::SgemmConfig<cutlass::Shape<8, 128, 128>, cutlass::Shape<8, 8, 8>, 1, 1, false>,
+  //   /// The traits class for the epilogue.
+  //   cutlass::gemm::SimplifiedGemmEpilogueTraits<
+  //     cutlass::gemm::SgemmConfig<cutlass::Shape<8, 128, 128>, cutlass::Shape<8, 8, 8>, 1, 1, false>, 
+  //     cutlass::gemm::LinearScaling<float>, 
+  //     int> > GemmTraits;
+
+
+
+
+template <
+    ////////////////////////////
+    /// The layout for A.
+    cutlass::MatrixLayout::Kind kLayoutA_,
+
+    ////////////////////////////
+    /// The layout for B.
+    cutlass::MatrixLayout::Kind kLayoutB_,
+
+    ////////////////////////////
+    /// Epilogue functor
+    typename EpilogueFunctor_ = cutlass::gemm::LinearScaling<float>,
+
+    ////////////////////////////
+    /// The index
+    typename Index_ = int,
+
+    // OutputTile: KxNxM
+    // ThreadGemmShape: KxNxM for thread level GEMM
+    // global load/store, shared load/store
+    // -> GemmGemmTileTraitsHelperA/B
+    // -> GemmConfig
+    // -> OutputTile, kScalarPerLdgA/B, ThreadGemmShape, 
+
+    // ~~~~~~~~~~~~
+    /// The config for the GEMM.
+    typename GemmConfig_,
+    // The configuration for the A matrix.
+    typename GemmTileTraitsHelperA_ = GemmTileTraitsHelperA<kLayoutA_, GemmConfig_>,
+    // The configuration for the B matrix.
+    typename GemmTileTraitsHelperB_ = GemmTileTraitsHelperB<kLayoutB_, GemmConfig_>,
+    // The helper class to create the streams and iterators.
+    typename Helper_ =
+        SimplifiedGemmTraitsHelper<GemmTileTraitsHelperA_, GemmTileTraitsHelperB_, Index_>,
+    /// The traits class for the epilogue.
+    typename GemmEpilogueTraits_ =
+        SimplifiedGemmEpilogueTraits<GemmConfig_, EpilogueFunctor_, Index_>,
+    // Epilogue function.
+    typename Epilogue_ = GemmEpilogue<GemmEpilogueTraits_> >
+struct SpecialGemmTraits : public SimplifiedGemmTraits<
+                         // The layout for A.
+                         kLayoutA_,
+                         // The layout for B.
+                         kLayoutB_,
+                         // The config.
+                         GemmConfig_,
+                         // The epilogue.
+                         GemmEpilogue<GemmEpilogueTraits_>,
+                         // The index.
+                         Index_> {};
+
+
+// public GemmTraits<
+//   // The config.
+//   GemmConfig_,
+//   // The stream to load A from global memory to shared memory.
+//   typename Helper_::GlobalLoadStreamA,
+//   // The stream to load B from global memory to shared memory.
+//   typename Helper_::GlobalLoadStreamB,
+//   // The stream to load A from shared memory.
+//   typename Helper_::SharedLoadStreamA,
+//   // The stream to load B from shared memory.
+//   typename Helper_::SharedLoadStreamB,
+//   // The epilogue.
+//   Epilogue_,
+//   // The block swizzle to reorganize the grid.
+//   cutlass::gemm::IdentityBlockSwizzle,
+//   // The index.
+//   Index_,
+//   // The tool used to clear accumulators.
+//   ClearAccumulators<typename GemmConfig_::Accumulators::Element> > {
+// };
 
   // Define a CUTLASS GEMM type from a GemmTraits<> instantiation.
   typedef cutlass::gemm::Gemm<GemmTraits> Gemm;
+
 
   // Construct and initialize CUTLASS GEMM parameters object.
   //
@@ -143,10 +249,6 @@ cudaError_t TestCutlassGemm(int H, int W, int N, int K, float alpha, float beta,
   cnpy::NpyArray input_npy = cnpy::npy_load(input_name);
   tmp = input_npy.data<float>();
   cudaMemcpy(A, tmp, input_shape * sizeof(float), cudaMemcpyHostToDevice);
-  // printf("****\n");
-  // for (int i = 0; i < input_shape / 10; i++) {
-  //   printf("%d, %f\n", i, tmp[i]);
-  // }
 
   // B
   cnpy::NpyArray filter_npy = cnpy::npy_load(filter_name);
@@ -160,18 +262,11 @@ cudaError_t TestCutlassGemm(int H, int W, int N, int K, float alpha, float beta,
   );
   RowMajorToColumnMajor<<<gridB, blockB>>>(B, B_tmp, K, N);
   cudaDeviceSynchronize();
-  // for (int i = 0; i < filter_shape / 10; i++) {
-  //   printf("%d, %f\n", i, tmp[i]);
-  // }
 
   // C
   cnpy::NpyArray output_npy = cnpy::npy_load(output_name);
   tmp = output_npy.data<float>();
   cudaMemcpy(C_cutlass, tmp, output_shape * sizeof(float), cudaMemcpyHostToDevice);
-  // printf("****\n");
-  // for (int i = 0; i < output_shape / 10; i++) {
-  //   printf("%d, %f\n", i, tmp[i]);
-  // }
   // Column major result
   dim3 blockC(16, 16);
   dim3 gridC(
@@ -189,19 +284,34 @@ cudaError_t TestCutlassGemm(int H, int W, int N, int K, float alpha, float beta,
 
 ////////////////////////////////////////////////////////////////
   // Launch CUTLASS GEMM.
-  result = CutlassSgemmNN(M, N, K, alpha, A, lda, B, ldb, beta, C_cutlass, ldc, isColumnMajor);
+  cudaEvent_t start, stop;
+  cudaEventCreate(&start);
+  cudaEventCreate(&stop);
+  float ms = 0;
+  int repeatition = 1000;
 
-  if (result != cudaSuccess) {
-    std::cerr << "CUTLASS GEMM kernel failed: "
-      << cudaGetErrorString(result) << std::endl;
-    cudaFree(C_reference);
-    cudaFree(C_cutlass);
-    cudaFree(B_tmp)
-    cudaFree(B);
-    cudaFree(A);
+  for (int i = 0; i < repeatition; i++) {
+    float tmp_t = 0.0;
+    cudaEventRecord(start);
+    result = CutlassSgemmTT(M, N, K, alpha, A, lda, B, ldb, beta, C_cutlass, ldc, isColumnMajor);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    if (result != cudaSuccess) {
+      std::cerr << "CUTLASS GEMM kernel failed: "
+        << cudaGetErrorString(result) << std::endl;
+      cudaFree(C_reference);
+      cudaFree(C_cutlass);
+      cudaFree(B_tmp);
+      cudaFree(B);
+      cudaFree(A);
 
-    return result;
+      return result;
+    }
+    cudaEventElapsedTime(&tmp_t, start, stop);
+    ms += tmp_t / repeatition;
   }
+    
+  printf("GEMM running time is %f us.\n", ms * 1000);
 
   result = cudaMemcpy(host_cutlass, C_cutlass, sizeof_C, cudaMemcpyDeviceToHost);
 
@@ -211,7 +321,7 @@ cudaError_t TestCutlassGemm(int H, int W, int N, int K, float alpha, float beta,
 
     cudaFree(C_reference);
     cudaFree(C_cutlass);
-    cudaFree(B_tmp)
+    cudaFree(B_tmp);
     cudaFree(B);
     cudaFree(A);
 
@@ -231,7 +341,7 @@ cudaError_t TestCutlassGemm(int H, int W, int N, int K, float alpha, float beta,
   // Free device memory allocations.
   cudaFree(C_reference);
   cudaFree(C_cutlass);
-  cudaFree(B_tmp)
+  cudaFree(B_tmp);
   cudaFree(B);
   cudaFree(A);
 

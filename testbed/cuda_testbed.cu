@@ -1,26 +1,36 @@
 #include <iostream>
 #include <string>
 #include "cnpy.h"
-#include "cutlass_multiple_output.cuh"
+#include "general_more_reuse.cuh"
 
 using namespace std;
 
 int main(int argc, char const *argv[])
 {
-	// NHWC
-	int N = 1, tile = 2;
+	// int N = 1, output_tile_H = 2, output_tile_W = 2;
+	int N = 1, output_tile_H = 4, output_tile_W = 4;
+
 	// int H = 112, W = 112, C = 32;
 	int H = 56, W = 56, C = 128;
 	// int H = 28, W = 28, C = 256;
 	// int H = 14, W = 14, C = 512;
 
 	// Block and grid size
-	int threadx_num = 32;
-	dim3 block(threadx_num, tile * tile, 1);
-	int block_x = (int)(C / 32) * (int)(H / tile) * (int)(W / tile) / 4; // / 2 or 4 for 64 outputs per 32 threadx
-	dim3 grid(block_x, 1, 1);
-	// int block_x = (int)(C / 32), block_y = (int)(H / tile) * (int)(W / tile);
-	// dim3 grid(block_x, block_y, 1);
+	int threadx_num = 32, C_stride = 32;
+	dim3 block(threadx_num, 4, 1);
+
+	// 1D grid
+	// int block_x = (int)(H / output_tile_H) * (int)(W / output_tile_W), block_y = 1;
+	// 2D grid
+	int block_x = (int)(H / output_tile_H), block_y = (int)(W / output_tile_W);
+
+	dim3 grid(block_x, block_y, 1);
+	printf("block x: %d, block_y: %d\n", block_x, block_y);
+
+	// Shared memory size
+	size_t inter_size = output_tile_H * output_tile_W * C_stride * sizeof(float);
+	size_t filter_1_size = C_stride * C_stride * sizeof(float);
+	size_t shared_size = inter_size + filter_1_size;
 
 	// Sizes
 	size_t input_shape = N * H * W * C;
@@ -63,21 +73,26 @@ int main(int argc, char const *argv[])
 	float ms = 0;
 	int repeatition = 1000;
 
-	int *d_data, h_data = 0;
-	cudaMalloc((void **)&d_data, sizeof(int));
-	cudaMemcpy(d_data, &h_data, sizeof(int), cudaMemcpyHostToDevice);
     for (int i = 0; i < repeatition; i++) {
+    	cudaMemset(output, 0, output_shape * sizeof(float));
     	float tmp_t = 0.0;
     	cudaEventRecord(start);
-	    DepthConvFused_2_kernel0<<<grid, block>>>(input, filter_d, filter_1, output, d_data);
+
+	    // DepthConvFused_2_kernel0<<<grid, block>>>(input, filter_d, filter_1, output);
+	    DepthConvFused_2_kernel0<<<grid, block, shared_size>>>(
+	    	input, 
+	    	filter_d, filter_1, 
+	    	output, 
+	    	H, W, C, C_stride,
+	    	output_tile_H, output_tile_W
+	    );
+
 	    cudaEventRecord(stop);
 
 	    cudaEventSynchronize(stop);
 		cudaEventElapsedTime(&tmp_t, start, stop);
 		ms += tmp_t / repeatition;
     }
-    cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost);
-	printf("data = %d\n", h_data);
     
 	printf("Fusion running time is %f us.\n", ms * 1000);
 
@@ -94,8 +109,10 @@ int main(int argc, char const *argv[])
     for(int i = 0; i < output_shape; i++) {
     	// printf("%d, %f, %lf\n", i, result[i], tmp2[i]);
     	// assert(abs(result[i] - (float)tmp2[i]) < 1e-4);
-    	if (abs(result[i] - (float)tmp2[i]) > 1e-4)
+    	if (abs(result[i] - (float)tmp2[i]) > 1e-3) {
+    		printf("%d, %f, %lf\n", i, result[i], tmp2[i]);
     		count++;
+    	}
     }
     printf("Wrong count: %d\n", count);
 
