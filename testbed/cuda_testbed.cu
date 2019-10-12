@@ -1,11 +1,12 @@
 #include <iostream>
 #include <string>
 #include "cnpy.h"
-#include "general_more_reuse.cuh"
+// #include "more_reuse.cuh"
+// #include "half_param_165.cuh"
+// #include "general_more_reuse.cuh"
+#include "less_CTA.cuh"
 
 using namespace std;
-
-#define BLOCK_Y_SIZE 4 // Fix this value in a foreseeable future
 
 int main(int argc, char const *argv[])
 {
@@ -13,13 +14,13 @@ int main(int argc, char const *argv[])
 	int N = 1, output_tile_H = 4, output_tile_W = 4;
 
 	// int H = 112, W = 112, C = 32;
-	int H = 56, W = 56, C = 128;
+	const int H = 56, W = 56, IC = 128, OC = 128, C = 128;
 	// int H = 28, W = 28, C = 256;
 	// int H = 14, W = 14, C = 512;
 
 	// Block and grid size
-	int threadx_num = 32, C_stride = 32;
-	dim3 block(threadx_num, BLOCK_Y_SIZE, 1);
+	int threadx_num = 32, IC_stride = 32, OC_stride = 32;
+	dim3 block(threadx_num, 4, 1);
 
 	// 1D grid
 	// int block_x = (int)(H / output_tile_H) * (int)(W / output_tile_W), block_y = 1;
@@ -30,21 +31,21 @@ int main(int argc, char const *argv[])
 	printf("block x: %d, block_y: %d\n", block_x, block_y);
 
 	// Shared memory size
-	size_t inter_size = output_tile_H * output_tile_W * C_stride * sizeof(float);
-	size_t filter_1_size = C_stride * C_stride * sizeof(float);
+	size_t inter_size = output_tile_H * output_tile_W * OC_stride * sizeof(float);
+	size_t filter_1_size = IC_stride * OC_stride * sizeof(float);
 	size_t shared_size = inter_size + filter_1_size;
 
 	// Sizes
-	size_t input_shape = N * H * W * C;
-	size_t filter_d_shape = 3 * 3 * C * 1;
-	size_t filter_1_shape = 1 * 1 * C * C;
-	size_t output_shape = N * H * W * C;
+	size_t input_shape = N * H * W * IC;
+	size_t filter_d_shape = 3 * 3 * IC * 1;
+	size_t filter_1_shape = 1 * 1 * IC * OC;
+	size_t output_shape = N * H * W * OC;
 
 	// Filenames
-	string input_name = "../npy/depth_conv_input_" + to_string(N) + "_" + to_string(H) + "_" + to_string(W) + "_" + to_string(C) + ".npy";
-	string filter_d_name = "../npy/depth_conv_filter_d_3_3_" + to_string(C) + "_1.npy";
-	string filter_1_name = "../npy/depth_conv_filter_1_1_1_" + to_string(C) + "_" + to_string(C) + ".npy";
-	string output_name = "../npy/depth_conv_output_" + to_string(N) + "_" + to_string(H) + "_" + to_string(W) + "_" + to_string(C) + ".npy";
+	string input_name = "../npy/depth_conv_input_" + to_string(N) + "_" + to_string(H) + "_" + to_string(W) + "_" + to_string(IC) + ".npy";
+	string filter_d_name = "../npy/depth_conv_filter_d_3_3_" + to_string(IC) + "_1.npy";
+	string filter_1_name = "../npy/depth_conv_filter_1_1_1_" + to_string(IC) + "_" + to_string(OC) + ".npy";
+	string output_name = "../npy/depth_conv_output_" + to_string(N) + "_" + to_string(H) + "_" + to_string(W) + "_" + to_string(OC) + ".npy";
 
 	// Definitions of GPU arrays
 	float *input, *filter_d, *filter_1, *output;
@@ -80,13 +81,32 @@ int main(int argc, char const *argv[])
     	float tmp_t = 0.0;
     	cudaEventRecord(start);
 
+    	// more_reuse.cuh and previous
 	    // DepthConvFused_2_kernel0<<<grid, block>>>(input, filter_d, filter_1, output);
-	    DepthConvFused_2_kernel0<<<grid, block, shared_size>>>(
-	    	input, 
-	    	filter_d, filter_1, 
-	    	output, 
-	    	H, W, C, C_stride,
-	    	output_tile_H, output_tile_W
+
+	    // // half_param_165.cuh
+	    // DepthConvFused_2_kernel0<<<grid, block, shared_size>>>(
+	    // 	input,
+	    // 	filter_d, filter_1,
+	    // 	output,
+	    // 	H, W, C, C_stride,
+	    // 	output_tile_H, output_tile_W
+	    // );
+
+	    // general_more_reuse.cuh
+	    // DepthConvFused_2_kernel0<<<grid, block, shared_size>>>(
+	    // 	input, 
+	    // 	filter_d, filter_1,
+	    // 	output,
+	    // 	H, W, C, C_stride
+	    // );
+
+	    // less_CTA.cuh
+	    DepthConvFused_2_kernel0 <56, 56, 128, 128, 
+	    							32, 32> <<<grid, block, shared_size>>> (
+	    	input,
+	    	filter_d, filter_1,
+	    	output
 	    );
 
 	    cudaEventRecord(stop);

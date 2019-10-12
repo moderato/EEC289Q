@@ -1,19 +1,5 @@
 #define FILTER_H 3
 #define FILTER_W 3
-#define BUFFER_STRIDE 2 // The stride the buffer moves each time
-#define STEP_OUTPUT_TILE_H 2
-#define STEP_OUTPUT_TILE_W 2 // e.g. EACH BLOCK EACH STEP reads a 4x4xC_stride chunk and computes a 2x2xC_stride chunk in stage 1
-#define OUTPUT_TILE_H 4
-#define OUTPUT_TILE_W 4
-#define READ_TILE_H (OUTPUT_TILE_H + FILTER_H - 1)
-#define READ_TILE_W (OUTPUT_TILE_W + FILTER_W - 1) // The tile size of input data to be read, e.g. read 6x6 to compute 4x4
-
-#define STEP_READ_TILE_H (STEP_OUTPUT_TILE_H + FILTER_H - 1)
-#define STEP_READ_TILE_W (STEP_OUTPUT_TILE_W + FILTER_W - 1) // The tile size of input data needed in one step, e.g. read 4x4 to compute 2x2
-
-#define STEP_H ((READ_TILE_H - STEP_READ_TILE_H) / STEP_OUTPUT_TILE_H + 1)
-#define STEP_W ((READ_TILE_W - STEP_READ_TILE_W) / STEP_OUTPUT_TILE_W + 1) // The step (number of stride moving) needed for a row/col, e.g. reading 4x4 in a 6x6 tile takes 2 steps in a row and 2 steps in a col
-
 #define BLOCK_Y_SIZE 4
 
 __device__ void getSharedHW(bool isTall, int& h, int& w) {
@@ -48,14 +34,14 @@ __device__ int getSharedCoordFloat2(int _s_h, int _s_w) {
 }
 
 __device__ void depthwiseConvSingleNum(float* Conv2dFilter_1_shared, 
-                                      float* filter,
+                                      float* filter, 
                                       float* DepthwiseConv2dOutput_0_local, 
-                                      int _s_orig_h, int _s_orig_w) {
+                                      int start_h, int start_w) {
 #pragma unroll
   for (int ry = 0; ry < FILTER_H; ++ry) {
     for (int rx = 0; rx < FILTER_W; ++rx) {
-      int w = _s_orig_w + rx + threadIdx.y % STEP_OUTPUT_TILE_W;
-      int h = _s_orig_h + ry + ((int)threadIdx.y / STEP_OUTPUT_TILE_W);
+      int w = start_w + rx + threadIdx.y % 2;
+      int h = start_h + ry + threadIdx.y / 2;
       int input_idx = threadIdx.x + 32 * ((w % 4) + (h % 4) * 4);
 
       DepthwiseConv2dOutput_0_local[0] += (
@@ -99,21 +85,22 @@ extern "C" __global__ void DepthConvFused_2_kernel0(const float* Input,
                                                     const float* DepthwiseFilter_1, 
                                                     const float* Conv2dFilter_1, 
                                                     float* Conv2dOutput_0, 
-                                                    int H, int W, int C, int C_stride) {
+                                                    int H, int W, int C, int C_stride,
+                                                    int output_tile_h, int output_tile_w) {
 
-  float Conv2dOutput_0_local[OUTPUT_TILE_H * OUTPUT_TILE_W] = { 0.0f };
-  float DepthwiseConv2dOutput_0_local[1] = { 0.0f };
+  float Conv2dOutput_0_local[16] = { 0.0f };
+  float DepthwiseConv2dOutput_0_local[1];
   
   extern __shared__ float s[];
   float *intermediate = s;
-  float *Conv2dFilter_1_shared = &s[OUTPUT_TILE_H * OUTPUT_TILE_W * C_stride];
+  float *Conv2dFilter_1_shared = &s[output_tile_h * output_tile_w * C_stride];
 
   //
   float filter[FILTER_H * FILTER_W];
   float buffer[8];
   int thx = threadIdx.x, thy = threadIdx.y, blx = blockIdx.x, bly = blockIdx.y;
-  int _g_h_blk = bly * OUTPUT_TILE_H;
-  int _g_w_blk = blx * OUTPUT_TILE_W;
+  int _g_h_blk = blx * output_tile_h;
+  int _g_w_blk = bly * output_tile_w;
   int _g_h, _g_w, _s_h, _s_w;
   //
 
@@ -122,7 +109,7 @@ extern "C" __global__ void DepthConvFused_2_kernel0(const float* Input,
 
     ///////////// Preprocessing /////////////
     // Load filter to RMem
-    #pragma unroll
+#pragma unroll
     for (int ry = 0; ry < FILTER_H; ++ry) {
       for (int rx = 0; rx < FILTER_W; ++rx) {
         filter[ry * FILTER_W + rx] = DepthwiseFilter_1[thx + (rc_outer_v * C_stride) + (ry * C * FILTER_W) + (rx * C)];
@@ -148,7 +135,7 @@ extern "C" __global__ void DepthConvFused_2_kernel0(const float* Input,
     *********************/
     // G->S
     int _s_h_coord = 0;
-    int _s_w_coord = 0;
+    int _s_w_coord = 2;
     // Get HWs
     getGlobalSharedHW(true, _g_h_blk, _g_w_blk, _s_h_coord, _s_w_coord, _g_h, _g_w, _s_h, _s_w);
     // Get global and shared coords
@@ -159,7 +146,7 @@ extern "C" __global__ void DepthConvFused_2_kernel0(const float* Input,
 
     // G->R
     _s_h_coord = 0;
-    _s_w_coord = BUFFER_STRIDE;
+    _s_w_coord = 0;
     // Get HWs
     getGlobalSharedHW(true, _g_h_blk, _g_w_blk, _s_h_coord, _s_w_coord, _g_h, _g_w, _s_h, _s_w);
     // Load from GMem to RMem
@@ -170,68 +157,66 @@ extern "C" __global__ void DepthConvFused_2_kernel0(const float* Input,
     // Load from RMem to SMem
       /*********************
       |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-      |   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |  | r | r | r | r |   |   |  
+      |   |   |   |   |   |   |  |   |   | r | r | r | r |  |   |   | s | s | s | s |  | r | r | s | s | s | s |  
       |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-      |   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |  | r | r | r | r |   |   |  
+      |   |   |   |   |   |   |  |   |   | r | r | r | r |  |   |   | s | s | s | s |  | r | r | s | s | s | s |  
       |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-      |   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
+      |   |   | s | s | s | s |  |   |   | s | s | s | s |  |   |   | s | s | s | s |  | r | r | s | s | s | s |  
       |+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->
-      |   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
+      |   |   | s | s | s | s |  |   |   | s | s | s | s |  |   |   | s | s | s | s |  | r | r | s | s | s | s |  
       |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-      |   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
+      |   |   | s | s | s | s |  |   |   | s | s | s | s |  |   |   |   |   |   |   |  |   |   |   |   |   |   |  
       |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-      |   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
+      |   |   | s | s | s | s |  |   |   | s | s | s | s |  |   |   |   |   |   |   |  |   |   |   |   |   |   |  
       |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-
       |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-      | s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
+      | s | s | s | s |   |   |  | s | s | s | s |   |   |  |   |   |   |   |   |   |
       |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-      | s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
+      | s | s | s | s |   |   |  | s | s | s | s |   |   |  |   |   |   |   |   |   |
       |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-      | s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
+      | s | s | s | s |   |   |  | s | s | s | s |   |   |  | s | s | s | s |   |   |
       |+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|
-      | s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
+      | s | s | s | s |   |   |  | s | s | s | s |   |   |  | s | s | s | s |   |   |
       |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-      |   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |
+      |   |   |   |   |   |   |  | r | r | r | r |   |   |  | s | s | s | s |   |   |
       |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-      |   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |
+      |   |   |   |   |   |   |  | r | r | r | r |   |   |  | s | s | s | s |   |   |
       |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
     *********************/
 
-    int _s_orig_h, _s_orig_w, shared_idx;
-    bool isTall;
-    for (int loop = 0; loop < STEP_H * STEP_W; loop++) {
-      int step_h = loop / STEP_W, step_w = loop % STEP_W;
+    for (int loop = 0; loop < 4; loop++) {
       DepthwiseConv2dOutput_0_local[0] = 0.0e+00f;
 
+      _s_coord = getSharedCoordFloat2(_s_h, _s_w);
       ((float2*)(Conv2dFilter_1_shared + _s_coord))[0] = ((float2*)(buffer))[0];
       __syncthreads();
+      
+      bool isTall = loop % 2;
+      int start_h, start_w, shared_idx;
 
-      // If the input data tile to be read is tall or long
-      isTall = (step_w != STEP_W - 1);
 
-      // The origin point (ref (0,0)) of the intermediate data tile to be written
-      _s_orig_h = step_h * BUFFER_STRIDE;
-      _s_orig_w = (step_h % 2) ? (BUFFER_STRIDE * (STEP_W - 1 - step_w)) : (BUFFER_STRIDE * step_w); // Even rows in increase order, odd rows in decrease order.
-
-      // The origin point (ref (0,0)) of the input data tile to be read
-      _s_h_coord = _s_orig_h + (!isTall) * 2 * BUFFER_STRIDE;
-      _s_w_coord = _s_orig_w + isTall * (2 - 3 * (step_h % 2)) * BUFFER_STRIDE;
-
-      // if (bly == 0 && blx == 0 && thy == 0 && thx == 0 && rc_outer_v == 0) {
-      //   printf("num of loops: %d, current loop: %d\n", STEP_H * STEP_W, loop);
-      //   // printf("_s_orig_w: %d, (_s_orig_h % 2): %d, (BUFFER_STRIDE * (STEP_W - step_w)): %d, (BUFFER_STRIDE * step_w): %d\n", _s_orig_w, (_s_orig_h % 2), (BUFFER_STRIDE * (STEP_W - step_w)), (BUFFER_STRIDE * step_w));
-      //   // printf("_s_w_coord: %d, _s_orig_w: %d, isTall: %d, (step_h % 2): %d\n", _s_w_coord, _s_orig_w, isTall, (step_h % 2));
-
-      //   printf("_s_orig_h: %d, _s_orig_w: %d\n", _s_orig_h, _s_orig_w);
-      //   printf("_s_h_coord: %d, _s_w_coord: %d\n", _s_h_coord, _s_w_coord);
-      //   printf("*********\n");
-      // }
-
-      shared_idx = thx + ((thy % 2) + thy / 2 * 4 + _s_orig_w) * C_stride + _s_orig_h * C;
+      if (loop == 0) {
+        start_h = 0, start_w = 0;
+        shared_idx = thx + ((thy % 2) + thy / 2 * 4) * C_stride;
+        _s_h_coord = 4;
+        _s_w_coord = 0;
+      } else if (loop == 1) {
+        start_h = 2, start_w = 0;
+        shared_idx = thx + ((thy % 2) + thy / 2 * 4) * C_stride + start_h * C;
+        _s_h_coord = 2;
+        _s_w_coord = 4;
+      } else if (loop == 2) {
+        start_h = 2, start_w = 2;
+        shared_idx = thx + ((thy % 2) + thy / 2 * 4 + start_w) * C_stride + start_h * C;
+        _s_h_coord = 0;
+        _s_w_coord = 2;
+      } else {
+        start_h = 0, start_w = 2;
+        shared_idx = thx + ((thy % 2) + thy / 2 * 4 + start_w) * C_stride;
+      }
 
       // Depthwise
-      depthwiseConvSingleNum(Conv2dFilter_1_shared, filter, DepthwiseConv2dOutput_0_local, _s_orig_h, _s_orig_w);
+      depthwiseConvSingleNum(Conv2dFilter_1_shared, filter, DepthwiseConv2dOutput_0_local, start_h, start_w);
       // Write from RMem to SMem
       intermediate[shared_idx] = DepthwiseConv2dOutput_0_local[0];
 
@@ -287,4 +272,3 @@ extern "C" __global__ void DepthConvFused_2_kernel0(const float* Input,
     Conv2dOutput_0[idx + 2 * W * C + 16] = Conv2dOutput_0_local[i * 2 + 9];
   }
 }
-
