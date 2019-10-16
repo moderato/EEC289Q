@@ -499,16 +499,18 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", NHWC_tra
     if save_data:
         # Save ref data
         for i in range(0, len(ref_data)):
-            filename = "npy/depth_conv_"
+            filename = "npy/depth_conv_%d_%d_%d_%d_%d_%d/" % (p[0], p[1], p[1], p[2], p[2] * p[4], p[3])
+            if not os.path.exists(filename):
+                os.mkdir(filename)
             if i == 0:
-                filename += "input_"
+                filename += "input"
             elif i == 1:
-                filename += "filter_d_"
+                filename += "filter_d"
             elif i == 2:
-                filename += "filter_1_"
+                filename += "filter_1"
             else:
-                filename += "output_"
-            np.save(filename + "%d_%d_%d_%d" % ref_data[i].shape, ref_data[i])
+                filename += "output"
+            np.save(filename, ref_data[i])
 
     # tmp = np.load("output_1_112_112_32.npy")
     # print(tmp[0,0,0,0:100])
@@ -560,10 +562,10 @@ if __name__ == "__main__":
     parameters = []
 
     parameters.append([1, 112, 32, 3, 1, True, 1, 32, False]) # 122.78 us
-    # parameters.append([1, 56, 128, 3, 1, True, 1, 128, False]) # 398.18 / 456.16 us
-    # parameters.append([1, 28, 256, 3, 1, True, 1, 256, False]) # 389.57 / 423.63 us
-    # parameters.append([1, 14, 512, 3, 1, True, 1, 512, False]) # 367.71 us, 344.27 us
+    parameters.append([1, 56, 128, 3, 1, True, 1, 128, False]) # 398.18 / 456.16 us
+    parameters.append([1, 28, 256, 3, 1, True, 1, 256, False]) # 389.57 / 423.63 us
+    parameters.append([1, 14, 512, 3, 1, True, 1, 512, False]) # 367.71 us, 344.27 us
 
     for p in parameters:
-        verify_depth_conv_fused(p, NHWC_transpose=False, print_code=True, save_data=False, export_code=False)
+        verify_depth_conv_fused(p, NHWC_transpose=False, print_code=False, save_data=True, export_code=False)
     

@@ -6,20 +6,41 @@
 // #include "general_more_reuse.cuh"
 #include "less_CTA.cuh"
 
+#define IC_stride 32
+#define OC_stride 32
+
+// #define H 112
+// #define W 112
+// #define IC 32
+// #define OC 32
+// #define C 32
+
+#define H 56
+#define W 56
+#define IC 128
+#define OC 128
+#define C 128
+
+// #define H 28
+// #define W 28
+// #define IC 256
+// #define OC 256
+// #define C 256
+
+// #define H 14
+// #define W 14
+// #define IC 512
+// #define OC 512
+// #define C 512
+
 using namespace std;
 
 int main(int argc, char const *argv[])
 {
-	// int N = 1, output_tile_H = 2, output_tile_W = 2;
 	int N = 1, output_tile_H = 4, output_tile_W = 4;
 
-	// int H = 112, W = 112, C = 32;
-	const int H = 56, W = 56, IC = 128, OC = 128, C = 128;
-	// int H = 28, W = 28, C = 256;
-	// int H = 14, W = 14, C = 512;
-
 	// Block and grid size
-	int threadx_num = 32, IC_stride = 32, OC_stride = 32;
+	int threadx_num = 32;
 	dim3 block(threadx_num, 4, 1);
 
 	// 1D grid
@@ -42,10 +63,11 @@ int main(int argc, char const *argv[])
 	size_t output_shape = N * H * W * OC;
 
 	// Filenames
-	string input_name = "../npy/depth_conv_input_" + to_string(N) + "_" + to_string(H) + "_" + to_string(W) + "_" + to_string(IC) + ".npy";
-	string filter_d_name = "../npy/depth_conv_filter_d_3_3_" + to_string(IC) + "_1.npy";
-	string filter_1_name = "../npy/depth_conv_filter_1_1_1_" + to_string(IC) + "_" + to_string(OC) + ".npy";
-	string output_name = "../npy/depth_conv_output_" + to_string(N) + "_" + to_string(H) + "_" + to_string(W) + "_" + to_string(OC) + ".npy";
+	string folder_name = "../npy/depth_conv_" + to_string(N) + "_" + to_string(H) + "_" + to_string(W) + "_" + to_string(IC) + "_" + to_string(OC) + "_" + to_string(3) + "/";
+	string input_name = folder_name + "input.npy";
+	string filter_d_name = folder_name + "filter_d.npy";
+	string filter_1_name = folder_name + "filter_1.npy";
+	string output_name = folder_name + "output.npy";
 
 	// Definitions of GPU arrays
 	float *input, *filter_d, *filter_1, *output;
@@ -102,12 +124,13 @@ int main(int argc, char const *argv[])
 	    // );
 
 	    // less_CTA.cuh
-	    DepthConvFused_2_kernel0 <56, 56, 128, 128, 
-	    							32, 32> <<<grid, block, shared_size>>> (
+	    DepthConvFused_2_kernel0 <H, W, IC, OC, 
+	    							IC_stride, OC_stride> <<<grid, block, shared_size>>> (
 	    	input,
 	    	filter_d, filter_1,
 	    	output
 	    );
+
 
 	    cudaEventRecord(stop);
 
