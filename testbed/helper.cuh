@@ -10,13 +10,15 @@
 
 /********************* Can be changed *********************/
 #define OUTPUT_TILE_H 4
-#define OUTPUT_TILE_W 8
+#define OUTPUT_TILE_W 4
 
 #define READ_TILE_H (OUTPUT_TILE_H + FILTER_H - 1)
 #define READ_TILE_W (OUTPUT_TILE_W + FILTER_W - 1) // The tile size of input data to be read, e.g. read 6x6 to compute 4x4
 
 #define STEP_H ((READ_TILE_H - STEP_READ_TILE_H) / STEP_OUTPUT_TILE_H + 1)
 #define STEP_W ((READ_TILE_W - STEP_READ_TILE_W) / STEP_OUTPUT_TILE_W + 1) // The step (number of stride moving) needed for a row/col, e.g. reading 4x4 in a 6x6 tile takes 2 steps in a row and 2 steps in a col
+
+#define OC_STRIDE_SPLIT 16 // Split OC_stride of 1x1 filter
 /**********************************************************/
 
 __device__ void getSharedHW(bool isTall, int& h, int& w) {
@@ -85,10 +87,20 @@ template<int W, int OC, int OC_stride>
 __device__ int getOutputBaseCoord(int _g_oc_step) {
   int _g_h_blk = blockIdx.y * OUTPUT_TILE_H;
   int _g_w_blk = blockIdx.x * OUTPUT_TILE_W;
-  return (_g_h_blk + (threadIdx.y / STEP_OUTPUT_TILE_H)) * W * OC + 
-          (_g_w_blk + (threadIdx.y % STEP_OUTPUT_TILE_W) * 2 + threadIdx.x / 16) * OC + 
-          _g_oc_step * OC_stride + 
-          threadIdx.x % 16;
+  // return (_g_h_blk + (threadIdx.y / STEP_OUTPUT_TILE_H)) * W * OC + 
+  //         (_g_w_blk + (threadIdx.y % STEP_OUTPUT_TILE_W) * 2 + threadIdx.x / 16) * OC + 
+  //         _g_oc_step * OC_stride + 
+  //         threadIdx.x % 16;
+
+  //             (_g_h_blk) * W * OC + 
+  //             (_g_w_blk + (threadIdx.y) * 2 + threadIdx.x / 16) * OC + 
+  //             _g_oc_step * OC_stride + 
+  //             threadIdx.x % 16;
+
+  return (_g_h_blk + (threadIdx.y * 2 / OUTPUT_TILE_W)) * W * OC + 
+      (_g_w_blk + (threadIdx.y * 2 % OUTPUT_TILE_W) + threadIdx.x / 16) * OC + 
+      _g_oc_step * OC_stride + 
+      threadIdx.x % 16;
 }
 
 template<int IC, int IC_stride>

@@ -3,7 +3,7 @@
 // OC_stride = IC_stride for now
 template <int H, int W, int IC, int OC, 
           int IC_stride, int OC_stride,
-          int REG_BUFFER_SIZE>
+          int REG_BUFFER_SIZE, int OC_STEP>
 __global__ void DepthConvFused_2_kernel0(const float* Input, 
                                          const float* DepthwiseFilter_1, 
                                          const float* Conv2dFilter_1, 
@@ -159,23 +159,36 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
       __syncthreads();
 
       // compute on smem
+      // OC_STRIDE_SPLIT usually 16
       for (int i = 0; i < IC_stride; i++) {
-        int inter_offset = thy * 64 + (thx / 16) * IC_stride + i;
-        int filter_offset = (thx % 16) + OC_stride * i;
+        int inter_offset = thy * 64 + (thx / OC_STRIDE_SPLIT) * IC_stride + i;
+        int filter_offset = (thx % OC_STRIDE_SPLIT) + OC_stride * i;
 
-  //       if (bly == 0 && blx == 0 && thy == 2 && thx == 0 && iter == 0) {
-		//   printf("Conv2dOutput_0_local[16]: %f\n", Conv2dOutput_0_local[16]);
-		// }
+        // if (bly == 0 && blx == 0 && thy == 2 && thx == 0 && iter == 0) {
+    		//   printf("Conv2dOutput_0_local[16]: %f\n", Conv2dOutput_0_local[16]);
+    		// }
 
-        Conv2dOutput_0_local[iter * 2 + 0] 	+= intermediate[inter_offset] 		* Conv2dFilter_1_shared[filter_offset];
-        Conv2dOutput_0_local[iter * 2 + 1] 	+= intermediate[inter_offset] 		* Conv2dFilter_1_shared[16 + filter_offset];
-        Conv2dOutput_0_local[iter * 2 + 8] 	+= intermediate[256 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
-        Conv2dOutput_0_local[iter * 2 + 9] 	+= intermediate[256 + inter_offset] * Conv2dFilter_1_shared[16 + filter_offset];
+        // // 8 = BLOCK_Y_SIZE * 32 / OC_STRIDE_SPLIT, which is basically fixed
+        // #pragma unroll
+        //   for (int j = 0, a = iter * 2, b = inter_offset; 
+        //         j < OUTPUT_TILE_H * OUTPUT_TILE_W / 8; 
+        //         j++, a += OC_STEP, b += 8 * OC_stride) {
+        //     Conv2dOutput_0_local[a]     += intermediate[b] * Conv2dFilter_1_shared[filter_offset];
+        //     Conv2dOutput_0_local[a+1]   += intermediate[b] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+        //   }
 
-        Conv2dOutput_0_local[iter * 2 + 16] += intermediate[512 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
-        Conv2dOutput_0_local[iter * 2 + 17] += intermediate[512 + inter_offset] * Conv2dFilter_1_shared[16 + filter_offset];
-        Conv2dOutput_0_local[iter * 2 + 24] += intermediate[768 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
-        Conv2dOutput_0_local[iter * 2 + 25] += intermediate[768 + inter_offset] * Conv2dFilter_1_shared[16 + filter_offset];
+        // Replace the above with the below to get a ~15us speedup for W=8,H=4
+        {
+          Conv2dOutput_0_local[iter * 2 + 0] 	+= intermediate[inter_offset] 		  * Conv2dFilter_1_shared[filter_offset];
+          Conv2dOutput_0_local[iter * 2 + 1] 	+= intermediate[inter_offset] 		  * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+          Conv2dOutput_0_local[iter * 2 + 8] 	+= intermediate[256 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
+          Conv2dOutput_0_local[iter * 2 + 9] 	+= intermediate[256 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+
+          Conv2dOutput_0_local[iter * 2 + 16] += intermediate[512 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
+          Conv2dOutput_0_local[iter * 2 + 17] += intermediate[512 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+          Conv2dOutput_0_local[iter * 2 + 24] += intermediate[768 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
+          Conv2dOutput_0_local[iter * 2 + 25] += intermediate[768 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+        }
       }
 
       // gmem to rmem
@@ -195,28 +208,14 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
   }
 
   for (int _g_oc_step = 0; _g_oc_step < (OC / OC_stride); _g_oc_step++) {
-    // int idx = getOutputBaseCoord<W, OC, OC_stride>(_g_oc_step);
-
-    // Conv2dOutput_0[idx] = Conv2dOutput_0_local[_g_oc_step * 2];
-    // Conv2dOutput_0[idx + 16] = Conv2dOutput_0_local[_g_oc_step * 2 + 1];
-    // Conv2dOutput_0[idx + 2 * W * OC] = Conv2dOutput_0_local[_g_oc_step * 2 + 8];
-    // Conv2dOutput_0[idx + 2 * W * OC + 16] = Conv2dOutput_0_local[_g_oc_step * 2 + 9];
-
-    int _g_h_blk = blockIdx.y * OUTPUT_TILE_H;
-    int _g_w_blk = blockIdx.x * OUTPUT_TILE_W;
-    int idx = (_g_h_blk) * W * OC + 
-	            (_g_w_blk + (threadIdx.y) * 2 + threadIdx.x / 16) * OC + 
-	            _g_oc_step * OC_stride + 
-	            threadIdx.x % 16;
+    int idx = getOutputBaseCoord<W, OC, OC_stride>(_g_oc_step);
 
 #pragma unroll
-	for (int i = 0; i < 4; i++) {
-	    Conv2dOutput_0[idx + W * OC * i] 		= 	Conv2dOutput_0_local[_g_oc_step * 2 + 8 * i];
-	    Conv2dOutput_0[idx + W * OC * i + 16] 	= 	Conv2dOutput_0_local[_g_oc_step * 2 + 8 * i + 1];
-	}
-
-    // if (idx + 2 * W * OC == 14848) {
-    // 	printf("bly: %d, blx: %d, thy: %d, thx: %d, _g_oc_step: %d\n", bly, blx, thy, thx, _g_oc_step);
-    // }
+  	for (int i = 0, a = 0, b = _g_oc_step * 2; 
+          i < OUTPUT_TILE_H * OUTPUT_TILE_W / 8;
+          i++, a += BLOCK_Y_SIZE * 2 / OUTPUT_TILE_W * W * OC, b += 8) {
+  	    Conv2dOutput_0[idx + a] 		= 	Conv2dOutput_0_local[b];
+  	    Conv2dOutput_0[idx + a + 16] 	= 	Conv2dOutput_0_local[b + 1];
+  	}
   }
 }

@@ -1,4 +1,4 @@
-NVCC_OPTIONS := -keep -O3 -gencode arch=compute_61,code=sm_61 -Xptxas --warn-on-spills --resource-usage -lineinfo # --maxrregcount=64
+NVCC_OPTIONS := -keep -O3 -gencode arch=compute_61,code=sm_61 -Xptxas --warn-on-spills --resource-usage -lineinfo --maxrregcount=72
 INCLUDE_PATH := -I/home/zhongyilin/Documents/cutlass
 
 all:

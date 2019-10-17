@@ -47,6 +47,7 @@
 #define THREAD_X 32
 #define THREAD_Y 4
 #define REG_BUFFER_SIZE (IC_STRIDE * OC_STRIDE / THREAD_X / THREAD_Y)
+#define OC_STEP (OC / OC_STRIDE_SPLIT)
 
 using namespace std;
 
@@ -140,7 +141,7 @@ int main(int argc, char const *argv[])
 	    // less_CTA_backup.cuh, less_CTA.cuh
 	    DepthConvFused_2_kernel0 <H, W, IC, OC, 
 	    							IC_STRIDE, OC_STRIDE,
-	    							REG_BUFFER_SIZE> <<<grid, block, shared_size>>> (
+	    							REG_BUFFER_SIZE, OC_STEP> <<<grid, block, shared_size>>> (
 	    	input,
 	    	filter_d, filter_1,
 	    	output
