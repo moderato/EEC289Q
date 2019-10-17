@@ -107,8 +107,8 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
 
       // Depthwise and store the result and store result to RMem
       shared_idx = thx + 
-      				(_s_orig_w + (thy % STEP_OUTPUT_TILE_W)) * IC_stride + 
-      				(_s_orig_h + (thy / STEP_OUTPUT_TILE_H)) * IC_stride * OUTPUT_TILE_W;
+              (_s_orig_w + (thy % STEP_OUTPUT_TILE_W)) * IC_stride + 
+              (_s_orig_h + (thy / STEP_OUTPUT_TILE_H)) * IC_stride * OUTPUT_TILE_W;
       depthwiseConvSingleNum<IC_stride>(Conv2dFilter_1_shared,
                                         filter,
                                         DepthwiseConv2dOutput_0_local,
@@ -117,7 +117,7 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
 
       // if (bly == 0 && blx == 0 && thy == 2 && thx == 0) {
       //     printf("loop: %d, _s_orig_h: %d, _s_orig_w: %d, _s_h_coord: %d, _s_w_coord: %d, shared_idx: %d\n", 
-      //     			loop, _s_orig_h, _s_orig_w, _s_h_coord, _s_w_coord, shared_idx);
+      //          loop, _s_orig_h, _s_orig_w, _s_h_coord, _s_w_coord, shared_idx);
       // }
 
       if (loop + 1 != STEP_H * STEP_W) {
@@ -164,13 +164,13 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
         int filter_offset = (thx % 16) + OC_stride * i;
 
   //       if (bly == 0 && blx == 0 && thy == 2 && thx == 0 && iter == 0) {
-		//   printf("Conv2dOutput_0_local[16]: %f\n", Conv2dOutput_0_local[16]);
-		// }
+    //   printf("Conv2dOutput_0_local[16]: %f\n", Conv2dOutput_0_local[16]);
+    // }
 
-        Conv2dOutput_0_local[iter * 2 + 0] 	+= intermediate[inter_offset] 		* Conv2dFilter_1_shared[filter_offset];
-        Conv2dOutput_0_local[iter * 2 + 1] 	+= intermediate[inter_offset] 		* Conv2dFilter_1_shared[16 + filter_offset];
-        Conv2dOutput_0_local[iter * 2 + 8] 	+= intermediate[256 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
-        Conv2dOutput_0_local[iter * 2 + 9] 	+= intermediate[256 + inter_offset] * Conv2dFilter_1_shared[16 + filter_offset];
+        Conv2dOutput_0_local[iter * 2 + 0]  += intermediate[inter_offset]     * Conv2dFilter_1_shared[filter_offset];
+        Conv2dOutput_0_local[iter * 2 + 1]  += intermediate[inter_offset]     * Conv2dFilter_1_shared[16 + filter_offset];
+        Conv2dOutput_0_local[iter * 2 + 8]  += intermediate[256 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
+        Conv2dOutput_0_local[iter * 2 + 9]  += intermediate[256 + inter_offset] * Conv2dFilter_1_shared[16 + filter_offset];
 
         Conv2dOutput_0_local[iter * 2 + 16] += intermediate[512 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
         Conv2dOutput_0_local[iter * 2 + 17] += intermediate[512 + inter_offset] * Conv2dFilter_1_shared[16 + filter_offset];
@@ -205,18 +205,18 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
     int _g_h_blk = blockIdx.y * OUTPUT_TILE_H;
     int _g_w_blk = blockIdx.x * OUTPUT_TILE_W;
     int idx = (_g_h_blk) * W * OC + 
-	            (_g_w_blk + (threadIdx.y) * 2 + threadIdx.x / 16) * OC + 
-	            _g_oc_step * OC_stride + 
-	            threadIdx.x % 16;
+              (_g_w_blk + (threadIdx.y) * 2 + threadIdx.x / 16) * OC + 
+              _g_oc_step * OC_stride + 
+              threadIdx.x % 16;
 
 #pragma unroll
-	for (int i = 0; i < 4; i++) {
-	    Conv2dOutput_0[idx + W * OC * i] 		= 	Conv2dOutput_0_local[_g_oc_step * 2 + 8 * i];
-	    Conv2dOutput_0[idx + W * OC * i + 16] 	= 	Conv2dOutput_0_local[_g_oc_step * 2 + 8 * i + 1];
-	}
+  for (int i = 0; i < 4; i++) {
+      Conv2dOutput_0[idx + W * OC * i]    =   Conv2dOutput_0_local[_g_oc_step * 2 + 8 * i];
+      Conv2dOutput_0[idx + W * OC * i + 16]   =   Conv2dOutput_0_local[_g_oc_step * 2 + 8 * i + 1];
+  }
 
     // if (idx + 2 * W * OC == 14848) {
-    // 	printf("bly: %d, blx: %d, thy: %d, thx: %d, _g_oc_step: %d\n", bly, blx, thy, thx, _g_oc_step);
+    //  printf("bly: %d, blx: %d, thy: %d, thx: %d, _g_oc_step: %d\n", bly, blx, thy, thx, _g_oc_step);
     // }
   }
 }

@@ -3,19 +3,21 @@
 #define FILTER_H 3
 #define FILTER_W 3
 #define BUFFER_STRIDE 2 // The stride the buffer moves each time
-
 #define STEP_OUTPUT_TILE_H 2
 #define STEP_OUTPUT_TILE_W 2 // e.g. EACH BLOCK EACH STEP reads a 4x4xIC_stride chunk and computes a 2x2xIC_stride chunk in stage 1
-#define OUTPUT_TILE_H 4
-#define OUTPUT_TILE_W 4
-#define READ_TILE_H (OUTPUT_TILE_H + FILTER_H - 1)
-#define READ_TILE_W (OUTPUT_TILE_W + FILTER_W - 1) // The tile size of input data to be read, e.g. read 6x6 to compute 4x4
-
 #define STEP_READ_TILE_H (STEP_OUTPUT_TILE_H + FILTER_H - 1)
 #define STEP_READ_TILE_W (STEP_OUTPUT_TILE_W + FILTER_W - 1) // The tile size of input data needed in one step, e.g. read 4x4 to compute 2x2
 
+/********************* Can be changed *********************/
+#define OUTPUT_TILE_H 4
+#define OUTPUT_TILE_W 8
+
+#define READ_TILE_H (OUTPUT_TILE_H + FILTER_H - 1)
+#define READ_TILE_W (OUTPUT_TILE_W + FILTER_W - 1) // The tile size of input data to be read, e.g. read 6x6 to compute 4x4
+
 #define STEP_H ((READ_TILE_H - STEP_READ_TILE_H) / STEP_OUTPUT_TILE_H + 1)
 #define STEP_W ((READ_TILE_W - STEP_READ_TILE_W) / STEP_OUTPUT_TILE_W + 1) // The step (number of stride moving) needed for a row/col, e.g. reading 4x4 in a 6x6 tile takes 2 steps in a row and 2 steps in a col
+/**********************************************************/
 
 __device__ void getSharedHW(bool isTall, int& h, int& w) {
   // 2x2 warps over H and W, 16 threads over C dimension
@@ -64,8 +66,10 @@ __device__ bool inGlobalRange(int _g_h, int _g_w) {
 }
 
 // SMem coord in a form of circular buffer
+template<int IC_stride>
 __device__ int getSharedCoordFloat2(int _s_h, int _s_w) {
-  return ((_s_h % 4) * 4 + (_s_w % 4)) * 32 + (threadIdx.x % 16) * 2;
+  return ((_s_h % STEP_READ_TILE_H) * STEP_READ_TILE_W + 
+            (_s_w % STEP_READ_TILE_W)) * IC_stride + (threadIdx.x % 16) * 2;
 }
 
 // GMem coord
@@ -75,6 +79,16 @@ __device__ int getGlobalCoordFloat2(int _g_h, int _g_w, int IC_step) {
           _g_w * IC +
           IC_stride * IC_step +
           (threadIdx.x % 16) * 2;
+}
+
+template<int W, int OC, int OC_stride>
+__device__ int getOutputBaseCoord(int _g_oc_step) {
+  int _g_h_blk = blockIdx.y * OUTPUT_TILE_H;
+  int _g_w_blk = blockIdx.x * OUTPUT_TILE_W;
+  return (_g_h_blk + (threadIdx.y / STEP_OUTPUT_TILE_H)) * W * OC + 
+          (_g_w_blk + (threadIdx.y % STEP_OUTPUT_TILE_W) * 2 + threadIdx.x / 16) * OC + 
+          _g_oc_step * OC_stride + 
+          threadIdx.x % 16;
 }
 
 template<int IC, int IC_stride>
@@ -87,6 +101,7 @@ __device__ void loadDepthwiseFilterGlobalToRegister(const float* src, float* dst
   }
 }
 
+template<int IC_stride>
 __device__ void depthwiseConvSingleNum(float* Conv2dFilter_1_shared, 
                                       float* filter,
                                       float* DepthwiseConv2dOutput_0_local, 
@@ -94,9 +109,10 @@ __device__ void depthwiseConvSingleNum(float* Conv2dFilter_1_shared,
 #pragma unroll
   for (int ry = 0; ry < FILTER_H; ++ry) {
     for (int rx = 0; rx < FILTER_W; ++rx) {
-      int w = _s_orig_w + rx + threadIdx.y % STEP_OUTPUT_TILE_W;
-      int h = _s_orig_h + ry + ((int)threadIdx.y / STEP_OUTPUT_TILE_W);
-      int input_idx = threadIdx.x + 32 * ((w % 4) + (h % 4) * 4);
+      int w = _s_orig_w + rx + (threadIdx.y % STEP_OUTPUT_TILE_W);
+      int h = _s_orig_h + ry + (threadIdx.y / STEP_OUTPUT_TILE_W);
+      int input_idx = threadIdx.x + IC_stride * ((w % STEP_READ_TILE_W) + 
+                                                  (h % STEP_READ_TILE_H) * STEP_READ_TILE_W);
 
       DepthwiseConv2dOutput_0_local[0] += (
           Conv2dFilter_1_shared[input_idx] * filter[ry * FILTER_W + rx]);
@@ -129,7 +145,7 @@ __device__ void loadWrapper(const float* src, float* dst,
   getGlobalSharedHW(isTall, _g_h_blk, _g_w_blk, _s_h_coord, _s_w_coord, _g_h, _g_w, _s_h, _s_w);
   // Get global and shared coords
   _g_coord = getGlobalCoordFloat2<W, IC, IC_stride>(_g_h, _g_w, IC_step);
-  _s_coord = getSharedCoordFloat2(_s_h, _s_w);
+  _s_coord = getSharedCoordFloat2<IC_stride>(_s_h, _s_w);
   int offset = toShared ? _s_coord : 0;
   // Load from GMem to SMem
   loadGlobalWithBoundCheck<H, W>(src, dst + offset, 
@@ -152,6 +168,15 @@ __device__ void prefetchInputData(const float* src, float* _s_dst, float* _r_dst
   loadWrapper<H, W, IC, IC_stride>(src, _r_dst, true, false, _g_coord, _s_coord, _s_h_coord, _s_w_coord, IC_step);
 }
 
+/**************
+0-->-->-->-->|
+             |
+|<--<--<--<--v
+|
+v-->-->-->-->|
+             |
+x<--<--<--<--v
+***************/
 __device__ void spaceFillingCalculation(int loop, bool& isTall,
                                         int& _s_orig_h, int& _s_orig_w,
                                         int& _s_h_coord, int& _s_w_coord) {

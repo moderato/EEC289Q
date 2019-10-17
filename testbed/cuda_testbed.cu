@@ -4,10 +4,11 @@
 // #include "more_reuse.cuh"
 // #include "half_param_165.cuh"
 // #include "general_more_reuse.cuh"
+// #include "less_CTA_backup.cuh"
 #include "less_CTA.cuh"
 
-#define IC_stride 32
-#define OC_stride 32
+/**************** Input & output sizes ****************/
+#define N 1
 
 // #define H 112
 // #define W 112
@@ -32,29 +33,42 @@
 // #define IC 512
 // #define OC 512
 // #define C 512
+/**************** -------------------- ****************/
+
+// Params
+#define IC_STRIDE 32
+#define OC_STRIDE 32
+#ifndef OUTPUT_TILE_H
+	#define OUTPUT_TILE_H 4
+#endif
+#ifndef OUTPUT_TILE_W
+	#define OUTPUT_TILE_W 4
+#endif
+#define THREAD_X 32
+#define THREAD_Y 4
+#define REG_BUFFER_SIZE (IC_STRIDE * OC_STRIDE / THREAD_X / THREAD_Y)
 
 using namespace std;
 
 int main(int argc, char const *argv[])
 {
-	int N = 1, output_tile_H = 4, output_tile_W = 4;
-
 	// Block and grid size
-	int threadx_num = 32;
-	dim3 block(threadx_num, 4, 1);
+	dim3 block(THREAD_X, THREAD_Y, 1);
 
 	// 1D grid
-	// int block_x = (int)(H / output_tile_H) * (int)(W / output_tile_W), block_y = 1;
+	// int BLOCK_X = (int)(H / OUTPUT_TILE_H) * (int)(W / OUTPUT_TILE_W), BLOCK_Y = 1;
 	// 2D grid
-	int block_x = (int)(H / output_tile_H), block_y = (int)(W / output_tile_W);
+	int BLOCK_X = (int)(W / OUTPUT_TILE_W), BLOCK_Y = (int)(H / OUTPUT_TILE_H);
 
-	dim3 grid(block_x, block_y, 1);
-	printf("block x: %d, block_y: %d\n", block_x, block_y);
+	dim3 grid(BLOCK_X, BLOCK_Y, 1);
+	printf("BLOCK_X: %d, BLOCK_Y: %d, REG_BUFFER_SIZE: %d\n", BLOCK_X, BLOCK_Y, REG_BUFFER_SIZE);
 
 	// Shared memory size
-	size_t inter_size = output_tile_H * output_tile_W * OC_stride * sizeof(float);
-	size_t filter_1_size = IC_stride * OC_stride * sizeof(float);
+	size_t inter_size = OUTPUT_TILE_H * OUTPUT_TILE_W * IC_STRIDE * sizeof(float);
+	size_t filter_1_size = IC_STRIDE * OC_STRIDE * sizeof(float);
 	size_t shared_size = inter_size + filter_1_size;
+	printf("Intermediate shared size: %d, filter size: %d\n", 
+		OUTPUT_TILE_H * OUTPUT_TILE_W * IC_STRIDE, IC_STRIDE * OC_STRIDE);
 
 	// Sizes
 	size_t input_shape = N * H * W * IC;
@@ -112,7 +126,7 @@ int main(int argc, char const *argv[])
 	    // 	filter_d, filter_1,
 	    // 	output,
 	    // 	H, W, C, C_stride,
-	    // 	output_tile_H, output_tile_W
+	    // 	OUTPUT_TILE_H, OUTPUT_TILE_W
 	    // );
 
 	    // general_more_reuse.cuh
@@ -123,9 +137,10 @@ int main(int argc, char const *argv[])
 	    // 	H, W, C, C_stride
 	    // );
 
-	    // less_CTA.cuh
+	    // less_CTA_backup.cuh, less_CTA.cuh
 	    DepthConvFused_2_kernel0 <H, W, IC, OC, 
-	    							IC_stride, OC_stride> <<<grid, block, shared_size>>> (
+	    							IC_STRIDE, OC_STRIDE,
+	    							REG_BUFFER_SIZE> <<<grid, block, shared_size>>> (
 	    	input,
 	    	filter_d, filter_1,
 	    	output
