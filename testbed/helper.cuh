@@ -10,7 +10,7 @@
 
 /********************* Can be changed *********************/
 #define OUTPUT_TILE_H 4
-#define OUTPUT_TILE_W 4
+#define OUTPUT_TILE_W 8
 
 #define READ_TILE_H (OUTPUT_TILE_H + FILTER_H - 1)
 #define READ_TILE_W (OUTPUT_TILE_W + FILTER_W - 1) // The tile size of input data to be read, e.g. read 6x6 to compute 4x4
@@ -87,20 +87,11 @@ template<int W, int OC, int OC_stride>
 __device__ int getOutputBaseCoord(int _g_oc_step) {
   int _g_h_blk = blockIdx.y * OUTPUT_TILE_H;
   int _g_w_blk = blockIdx.x * OUTPUT_TILE_W;
-  // return (_g_h_blk + (threadIdx.y / STEP_OUTPUT_TILE_H)) * W * OC + 
-  //         (_g_w_blk + (threadIdx.y % STEP_OUTPUT_TILE_W) * 2 + threadIdx.x / 16) * OC + 
-  //         _g_oc_step * OC_stride + 
-  //         threadIdx.x % 16;
-
-  //             (_g_h_blk) * W * OC + 
-  //             (_g_w_blk + (threadIdx.y) * 2 + threadIdx.x / 16) * OC + 
-  //             _g_oc_step * OC_stride + 
-  //             threadIdx.x % 16;
 
   return (_g_h_blk + (threadIdx.y * 2 / OUTPUT_TILE_W)) * W * OC + 
-      (_g_w_blk + (threadIdx.y * 2 % OUTPUT_TILE_W) + threadIdx.x / 16) * OC + 
+      (_g_w_blk + (threadIdx.y * 2 % OUTPUT_TILE_W) + threadIdx.x / OC_STRIDE_SPLIT) * OC + 
       _g_oc_step * OC_stride + 
-      threadIdx.x % 16;
+      threadIdx.x % OC_STRIDE_SPLIT;
 }
 
 template<int IC, int IC_stride>

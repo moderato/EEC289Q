@@ -164,10 +164,6 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
         int inter_offset = thy * 64 + (thx / OC_STRIDE_SPLIT) * IC_stride + i;
         int filter_offset = (thx % OC_STRIDE_SPLIT) + OC_stride * i;
 
-        // if (bly == 0 && blx == 0 && thy == 2 && thx == 0 && iter == 0) {
-    		//   printf("Conv2dOutput_0_local[16]: %f\n", Conv2dOutput_0_local[16]);
-    		// }
-
         // // 8 = BLOCK_Y_SIZE * 32 / OC_STRIDE_SPLIT, which is basically fixed
         // #pragma unroll
         //   for (int j = 0, a = iter * 2, b = inter_offset; 
