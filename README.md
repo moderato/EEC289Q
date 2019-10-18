@@ -6,7 +6,7 @@ TVM scheduler for normal convolution with the tensor layout in the form of NHWC,
 Improved runtime of TVM’s depthwise convolution scheduler by replacing filter-reuse with input-reuse.     
 #### Nov 2018
 Adding simple benchmarks for analyzing bottlenecks of fused and non-fused computation
-#### Oct 2018
+#### Oct 2019
 Reaching 147us over 56x56x112. Expanding to all size.
 
 #### Files:
