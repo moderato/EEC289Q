@@ -19,6 +19,9 @@
 #define STEP_W ((READ_TILE_W - STEP_READ_TILE_W) / STEP_OUTPUT_TILE_W + 1) // The step (number of stride moving) needed for a row/col, e.g. reading 4x4 in a 6x6 tile takes 2 steps in a row and 2 steps in a col
 
 #define OC_STRIDE_SPLIT 16 // Split OC_stride of 1x1 filter
+
+#define OUTPUT_W_TILE_NUM 1
+#define OUTPUT_H_TILE_NUM 1 // Num of output tiles in H/W direction
 /**********************************************************/
 
 __device__ void getSharedHW(bool isTall, int& h, int& w) {
@@ -48,18 +51,12 @@ __device__ void getGlobalSharedHW(bool isTall,
   _s_w =          + _s_w_coord + w;
 }
 
-__device__ void load1x1FilterGlobalToRegister(const float* src, float* dst, int origin, int offset) {
-  ((float4*)(dst))[0] = ((float4*)(src + (
-      origin + offset
-    )
-  ))[0];
+__device__ void loadFloat4(const float* src, float* dst, int src_offset, int dst_offset) {
+  reinterpret_cast<float4*>(dst + dst_offset)[0] = ((float4*)(src + src_offset))[0];
 }
 
-__device__ void load1x1FilterRegisterToShared(float* src, float* dst, int origin, int offset) {
-  ((float4*)(dst + (
-      origin + offset
-    )
-  ))[0] = ((float4*)(src))[0];
+__device__ void loadFloat4(float* src, float* dst, int src_offset, int dst_offset) {
+  reinterpret_cast<float4*>(dst + dst_offset)[0] = reinterpret_cast<float4*>(src + src_offset)[0];
 }
 
 template<int H, int W>
@@ -116,7 +113,6 @@ __device__ void depthwiseConvSingleNum(float* Conv2dFilter_1_shared,
       int h = _s_orig_h + ry + (threadIdx.y / STEP_OUTPUT_TILE_W);
       int input_idx = threadIdx.x + IC_stride * ((w % STEP_READ_TILE_W) + 
                                                   (h % STEP_READ_TILE_H) * STEP_READ_TILE_W);
-
       DepthwiseConv2dOutput_0_local[0] += (
           Conv2dFilter_1_shared[input_idx] * filter[ry * FILTER_W + rx]);
     }
@@ -156,6 +152,23 @@ __device__ void loadWrapper(const float* src, float* dst,
                                 _g_h, _g_w);
 }
 
+/*********************
+  |+++|+++|+++|+++|+++|+++|
+  |   |   |   |   |   |   | 5
+  |+++|+++|+++|+++|+++|+++|
+  |   |   |   |   |   |   | 4
+  |+++|+++|+++|+++|+++|+++|
+  |   |   | s | s | r | r | 3
+  |+++|+++|+++|+++|+++|+++|
+  |   |   | s | s | r | r | 2
+  |+++|+++|+++|+++|+++|+++|
+  |   |   | s | s | r | r | 1
+  |+++|+++|+++|+++|+++|+++|
+  |   |   | s | s | r | r | 0
+  |+++|+++|+++|+++|+++|+++|
+    5   4   3   2   1   0
+*********************/
+
 template<int H, int W, int IC, int IC_stride>
 __device__ void prefetchInputData(const float* src, float* _s_dst, float* _r_dst,
                                   int& _g_coord, int& _s_coord,
@@ -171,7 +184,35 @@ __device__ void prefetchInputData(const float* src, float* _s_dst, float* _r_dst
   loadWrapper<H, W, IC, IC_stride>(src, _r_dst, true, false, _g_coord, _s_coord, _s_h_coord, _s_w_coord, IC_step);
 }
 
-/**************
+/*********************
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
+|   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |  | r | r | r | r |   |   |  
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
+|   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |  | r | r | r | r |   |   |  
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
+|   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
+|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->
+|   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
+|   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
+|   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
+
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
+| s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
+| s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
+| s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
+|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|
+| s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
+|   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
+|   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
+
 0-->-->-->-->|
              |
 |<--<--<--<--v
@@ -179,7 +220,7 @@ __device__ void prefetchInputData(const float* src, float* _s_dst, float* _r_dst
 v-->-->-->-->|
              |
 x<--<--<--<--v
-***************/
+*********************/
 __device__ void spaceFillingCalculation(int loop, bool& isTall,
                                         int& _s_orig_h, int& _s_orig_w,
                                         int& _s_h_coord, int& _s_w_coord) {
@@ -196,3 +237,35 @@ __device__ void spaceFillingCalculation(int loop, bool& isTall,
   _s_h_coord = _s_orig_h + (!isTall) * 2 * BUFFER_STRIDE;
   _s_w_coord = _s_orig_w + isTall * (2 - 3 * (step_h % 2)) * BUFFER_STRIDE;
 }
+
+template<int IC_stride, int OC>
+__device__ void loadBlockGlobalToRegister(const float* src, float* dst, 
+                                          int src_offset, int dst_offset,
+                                          int num_thx_per_seg) {
+  int stride = blockDim.x / num_thx_per_seg * blockDim.y * OC;
+  int steps = IC_stride / (blockDim.x / num_thx_per_seg * blockDim.y);
+
+#pragma unroll
+  for (int num_steps = 0, offset = src_offset; num_steps < steps; num_steps++, offset += stride) {
+    loadFloat4(src, dst, offset, 4 * num_steps);
+  }
+}
+
+template<int IC_stride, int OC_stride>
+__device__ void loadBlockRegisterToShared(float* src, float* dst, 
+                                          int src_offset, int dst_offset,
+                                          int num_thx_per_seg) {
+  int stride = blockDim.x / num_thx_per_seg * blockDim.y * OC_stride;
+  int steps = IC_stride / (blockDim.x / num_thx_per_seg * blockDim.y);
+
+#pragma unroll
+  for (int num_steps = 0, offset = dst_offset; num_steps < steps; num_steps++, offset += stride) {
+    loadFloat4(src, dst, 4 * num_steps, offset);
+  }
+}
+
+
+
+
+
+

@@ -39,22 +39,6 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
     loadDepthwiseFilterGlobalToRegister<IC, IC_stride>(DepthwiseFilter_1, filter, _g_oc_step);
 
     // Load tile ((2,0), (3,3)) to SMem, ((0,0), (1,3)) to RMem
-    /*********************
-      |+++|+++|+++|+++|+++|+++|
-      |   |   |   |   |   |   | 5
-      |+++|+++|+++|+++|+++|+++|
-      |   |   |   |   |   |   | 4
-      |+++|+++|+++|+++|+++|+++|
-      |   |   | s | s | r | r | 3
-      |+++|+++|+++|+++|+++|+++|
-      |   |   | s | s | r | r | 2
-      |+++|+++|+++|+++|+++|+++|
-      |   |   | s | s | r | r | 1
-      |+++|+++|+++|+++|+++|+++|
-      |   |   | s | s | r | r | 0
-      |+++|+++|+++|+++|+++|+++|
-        5   4   3   2   1   0
-    *********************/
     prefetchInputData<H, W, IC, IC_stride>(Input,                 /* Input src    */
                                           Conv2dFilter_1_shared, /* Shared dst   */
                                           buffer,                /* Register dst */
@@ -63,36 +47,6 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
 
     //////////////////////////// Loop ////////////////////////////
     // Load from RMem to SMem
-    /*********************
-      |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-      |   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |  | r | r | r | r |   |   |  
-      |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-      |   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |  | r | r | r | r |   |   |  
-      |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-      |   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
-      |+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->
-      |   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
-      |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-      |   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
-      |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-      |   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
-      |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-
-      |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-      | s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
-      |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-      | s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
-      |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-      | s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
-      |+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|
-      | s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
-      |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-      |   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |
-      |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-      |   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |
-      |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-    *********************/
-
     for (int loop = 0; loop < STEP_H * STEP_W; loop++) {
       DepthwiseConv2dOutput_0_local[0] = 0.0e+00f;
 
@@ -133,29 +87,41 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
     }
 
     // gmem to rmem
-    int _g_input_origin = _g_oc_step * OC * OC_stride;
-    int _g_input_offset = (thx % num_thx_per_seg) * 4 + (thx + blockDim.x * thy) / num_thx_per_seg * OC;
+    int _g_input_offset = _g_oc_step * OC * OC_stride + /* origin */
+                          (thx % num_thx_per_seg) * 4 + 
+                          (thx + blockDim.x * thy) / num_thx_per_seg * OC; /* offset */
 
-    load1x1FilterGlobalToRegister(Conv2dFilter_1,
-                                  buffer,
-                                  _g_input_origin,
-                                  _g_input_offset);
-    load1x1FilterGlobalToRegister(Conv2dFilter_1,
-                                  buffer + 4,
-                                  _g_input_origin + blockDim.x / num_thx_per_seg * blockDim.y * OC, // Row offset
-                                  _g_input_offset);
+    loadFloat4(Conv2dFilter_1, 
+                buffer,
+                _g_input_offset, 
+                0);
+    loadFloat4(Conv2dFilter_1, 
+                buffer,
+                _g_input_offset + blockDim.x / num_thx_per_seg * blockDim.y * OC, 
+                4);
+
+    // Slow for ~25us don't know why
+    // loadBlockGlobalToRegister<IC_stride, OC>(Conv2dFilter_1, buffer, 
+    //                                           _g_input_offset, 0,
+    //                                           num_thx_per_seg);
 
     for (int iter = 0; iter < OC / OC_stride; iter++) {
       // rmem to smem
-      int _s_offset = (thx % num_thx_per_seg) * 4 + (thx + blockDim.x * thy) / num_thx_per_seg * OC_stride;
-      load1x1FilterRegisterToShared(buffer,
-                                    Conv2dFilter_1_shared,
-                                    0,
-                                    _s_offset);
-      load1x1FilterRegisterToShared(buffer + 4,
-                                    Conv2dFilter_1_shared,
-                                    blockDim.x / num_thx_per_seg * blockDim.y * OC_stride,
-                                    _s_offset);
+      int _s_offset = (thx % num_thx_per_seg) * 4 + 
+                      (thx + blockDim.x * thy) / num_thx_per_seg * OC_stride;
+      loadFloat4(buffer, 
+                Conv2dFilter_1_shared,
+                0, 
+                _s_offset);
+      loadFloat4(buffer, 
+                Conv2dFilter_1_shared,
+                4,
+                _s_offset + blockDim.x / num_thx_per_seg * blockDim.y * OC_stride);
+
+      // loadBlockRegisterToShared<IC_stride, OC_stride>(buffer, Conv2dFilter_1_shared,
+      //                                                 0, _s_offset,
+      //                                                 num_thx_per_seg);
+
       __syncthreads();
 
       // compute on smem
@@ -187,17 +153,24 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
         }
       }
 
+      __syncthreads();
+
       // gmem to rmem
-      if (iter < 3) {
-        _g_input_origin += OC_stride;
-        load1x1FilterGlobalToRegister(Conv2dFilter_1,
-                                      buffer,
-                                      _g_input_origin,
-                                      _g_input_offset);
-        load1x1FilterGlobalToRegister(Conv2dFilter_1,
-                                      buffer + 4,
-                                      _g_input_origin + blockDim.x / num_thx_per_seg * blockDim.y * OC, // Row offset
-                                      _g_input_offset);
+      if (iter + 1 != OC / OC_stride) {
+        _g_input_offset += OC_stride;
+        loadFloat4(Conv2dFilter_1, 
+                    buffer,
+                    _g_input_offset, 
+                    0);
+        loadFloat4(Conv2dFilter_1,
+                    buffer,
+                    _g_input_offset + blockDim.x / num_thx_per_seg * blockDim.y * OC, 
+                    4);
+
+        // Slow for ~25us don't know why
+        // loadBlockGlobalToRegister<IC_stride, OC>(Conv2dFilter_1, buffer, 
+        //                                           _g_input_offset, 0,
+        //                                           num_thx_per_seg);
       }
       __syncthreads();
     }

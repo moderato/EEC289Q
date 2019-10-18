@@ -5,7 +5,9 @@
 // #include "half_param_165.cuh"
 // #include "general_more_reuse.cuh"
 // #include "less_CTA_backup.cuh"
-#include "less_CTA.cuh"
+// #include "less_CTA_together.cuh"
+#include "less_CTA_startover.cuh"
+
 
 /**************** Input & output sizes ****************/
 #define N 1
@@ -138,7 +140,7 @@ int main(int argc, char const *argv[])
 	    // 	H, W, C, C_stride
 	    // );
 
-	    // less_CTA_backup.cuh, less_CTA.cuh
+	    // less_CTA_backup.cuh, less_CTA_together.cuh, less_CTA_startover.cuh
 	    DepthConvFused_2_kernel0 <H, W, IC, OC, 
 	    							IC_STRIDE, OC_STRIDE,
 	    							REG_BUFFER_SIZE, OC_STEP> <<<grid, block, shared_size>>> (
@@ -167,7 +169,7 @@ int main(int argc, char const *argv[])
     result = (float*)malloc(output_shape * sizeof(float));
     cudaMemcpy(result, output, output_shape * sizeof(float), cudaMemcpyDeviceToHost);
     int count = 0;
-    for(int i = 0; i < output_shape; i++) {
+    for(int i = 0; i < 512; i++) {
     	// printf("%d, %f, %lf\n", i, result[i], tmp2[i]);
     	// assert(abs(result[i] - (float)tmp2[i]) < 1e-4);
     	if (abs(result[i] - (float)tmp2[i]) > 1e-3) {
