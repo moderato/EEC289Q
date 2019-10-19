@@ -3,7 +3,8 @@
 // OC_stride = IC_stride for now
 template <int H, int W, int IC, int OC, 
           int IC_stride, int OC_stride,
-          int REG_BUFFER_SIZE, int OC_STEP>
+          int REG_BUFFER_SIZE, int OC_STEP,
+          int NUM_THX_PER_SEG>
 __global__ void DepthConvFused_2_kernel0(const float* Input, 
                                          const float* DepthwiseFilter_1, 
                                          const float* Conv2dFilter_1, 
@@ -13,10 +14,10 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
   static_assert((IC_stride <= IC && IC_stride > 0), "!");
   static_assert((IC_stride & (IC_stride - 1)) == 0, "!"); // IC_stride is power of 2
   static_assert((OC_stride & (OC_stride - 1)) == 0, "!"); // OC_stride is Power of 2
+  static_assert((NUM_THX_PER_SEG == OC_stride / 4), "!");
 
   // Params
   int thx = threadIdx.x, thy = threadIdx.y, blx = blockIdx.x, bly = blockIdx.y;
-  int num_thx_per_seg = OC_stride / 4;
   int _g_coord, _s_coord, _s_h_coord, _s_w_coord;
   int _s_orig_h, _s_orig_w, shared_idx;
   bool isTall;
@@ -30,7 +31,7 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
   float Conv2dOutput_0_local[OUTPUT_TILE_H * OUTPUT_TILE_W] = { 0.0f };
   float DepthwiseConv2dOutput_0_local[1] = { 0.0f };
   float filter[FILTER_H * FILTER_W];
-  // 8 = OC_stride * OC_stride / (blockDim.y * blockDim.x)
+  // 8 = OC_stride * OC_stride / (BLOCK_DIM_Y * BLOCK_DIM_X)
   float buffer[REG_BUFFER_SIZE];
 
   for (int _g_oc_step = 0; _g_oc_step < IC / IC_stride; _g_oc_step++) {
@@ -69,11 +70,6 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
                                         _s_orig_h, _s_orig_w);
       intermediate[shared_idx] = DepthwiseConv2dOutput_0_local[0];
 
-      // if (bly == 0 && blx == 0 && thy == 2 && thx == 0) {
-      //     printf("loop: %d, _s_orig_h: %d, _s_orig_w: %d, _s_h_coord: %d, _s_w_coord: %d, shared_idx: %d\n", 
-      //          loop, _s_orig_h, _s_orig_w, _s_h_coord, _s_w_coord, shared_idx);
-      // }
-
       if (loop + 1 != STEP_H * STEP_W) {
         // Load from global to register
         loadWrapper<H, W, IC, IC_stride>(Input, buffer,
@@ -88,39 +84,20 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
 
     // gmem to rmem
     int _g_input_offset = _g_oc_step * OC * OC_stride + /* origin */
-                          (thx % num_thx_per_seg) * 4 + 
-                          (thx + blockDim.x * thy) / num_thx_per_seg * OC; /* offset */
-
-    loadFloat4(Conv2dFilter_1, 
-                buffer,
-                _g_input_offset, 
-                0);
-    loadFloat4(Conv2dFilter_1, 
-                buffer,
-                _g_input_offset + blockDim.x / num_thx_per_seg * blockDim.y * OC, 
-                4);
+                          (thx % NUM_THX_PER_SEG) * 4 + 
+                          (thx + BLOCK_DIM_X * thy) / NUM_THX_PER_SEG * OC; /* offset */
 
     // Slow for ~25us don't know why
-    // loadBlockGlobalToRegister<IC_stride, OC>(Conv2dFilter_1, buffer, 
-    //                                           _g_input_offset, 0,
-    //                                           num_thx_per_seg);
+    loadBlockGlobalToRegister<IC_stride, OC, NUM_THX_PER_SEG>(Conv2dFilter_1, buffer, 
+                                                               _g_input_offset, 0);
 
     for (int iter = 0; iter < OC / OC_stride; iter++) {
       // rmem to smem
-      int _s_offset = (thx % num_thx_per_seg) * 4 + 
-                      (thx + blockDim.x * thy) / num_thx_per_seg * OC_stride;
-      loadFloat4(buffer, 
-                Conv2dFilter_1_shared,
-                0, 
-                _s_offset);
-      loadFloat4(buffer, 
-                Conv2dFilter_1_shared,
-                4,
-                _s_offset + blockDim.x / num_thx_per_seg * blockDim.y * OC_stride);
+      int _s_offset = (thx % NUM_THX_PER_SEG) * 4 + 
+                      (thx + BLOCK_DIM_X * thy) / NUM_THX_PER_SEG * OC_stride;
 
-      // loadBlockRegisterToShared<IC_stride, OC_stride>(buffer, Conv2dFilter_1_shared,
-      //                                                 0, _s_offset,
-      //                                                 num_thx_per_seg);
+      loadBlockRegisterToShared<IC_stride, OC_stride, NUM_THX_PER_SEG>(buffer, Conv2dFilter_1_shared,
+                                                                       0, _s_offset);
 
       __syncthreads();
 
@@ -130,7 +107,7 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
         int inter_offset = thy * 64 + (thx / OC_STRIDE_SPLIT) * IC_stride + i;
         int filter_offset = (thx % OC_STRIDE_SPLIT) + OC_stride * i;
 
-        // // 8 = BLOCK_Y_SIZE * 32 / OC_STRIDE_SPLIT, which is basically fixed
+        // // 8 = BLOCK_DIM_Y * 32 / OC_STRIDE_SPLIT, which is basically fixed
         // #pragma unroll
         //   for (int j = 0, a = iter * 2, b = inter_offset; 
         //         j < OUTPUT_TILE_H * OUTPUT_TILE_W / 8; 
@@ -158,19 +135,8 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
       // gmem to rmem
       if (iter + 1 != OC / OC_stride) {
         _g_input_offset += OC_stride;
-        loadFloat4(Conv2dFilter_1, 
-                    buffer,
-                    _g_input_offset, 
-                    0);
-        loadFloat4(Conv2dFilter_1,
-                    buffer,
-                    _g_input_offset + blockDim.x / num_thx_per_seg * blockDim.y * OC, 
-                    4);
-
-        // Slow for ~25us don't know why
-        // loadBlockGlobalToRegister<IC_stride, OC>(Conv2dFilter_1, buffer, 
-        //                                           _g_input_offset, 0,
-        //                                           num_thx_per_seg);
+        loadBlockGlobalToRegister<IC_stride, OC, NUM_THX_PER_SEG>(Conv2dFilter_1, buffer, 
+                                                                  _g_input_offset, 0);
       }
       __syncthreads();
     }
@@ -182,7 +148,7 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
 #pragma unroll
     for (int i = 0, a = 0, b = _g_oc_step * 2; 
           i < OUTPUT_TILE_H * OUTPUT_TILE_W / 8;
-          i++, a += BLOCK_Y_SIZE * 2 / OUTPUT_TILE_W * W * OC, b += 8) {
+          i++, a += BLOCK_DIM_Y * 2 / OUTPUT_TILE_W * W * OC, b += 8) {
         Conv2dOutput_0[idx + a]     =   Conv2dOutput_0_local[b];
         Conv2dOutput_0[idx + a + 16]  =   Conv2dOutput_0_local[b + 1];
     }

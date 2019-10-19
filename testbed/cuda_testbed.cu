@@ -46,17 +46,22 @@
 #ifndef OUTPUT_TILE_W
 	#define OUTPUT_TILE_W 4
 #endif
-#define THREAD_X 32
-#define THREAD_Y 4
-#define REG_BUFFER_SIZE (IC_STRIDE * OC_STRIDE / THREAD_X / THREAD_Y)
+#ifndef BLOCK_DIM_X
+	#define BLOCK_DIM_X 32
+#endif
+#ifndef BLOCK_DIM_Y
+	#define BLOCK_DIM_Y 4
+#endif
+#define REG_BUFFER_SIZE (IC_STRIDE * OC_STRIDE / BLOCK_DIM_X / BLOCK_DIM_Y)
 #define OC_STEP (OC / OC_STRIDE_SPLIT)
+#define NUM_THX_PER_SEG (OC_STRIDE / 4)
 
 using namespace std;
 
 int main(int argc, char const *argv[])
 {
 	// Block and grid size
-	dim3 block(THREAD_X, THREAD_Y, 1);
+	dim3 block(BLOCK_DIM_X, BLOCK_DIM_Y, 1);
 
 	// 1D grid
 	// int BLOCK_X = (int)(H / OUTPUT_TILE_H) * (int)(W / OUTPUT_TILE_W), BLOCK_Y = 1;
@@ -64,7 +69,7 @@ int main(int argc, char const *argv[])
 	int BLOCK_X = (int)(W / OUTPUT_TILE_W), BLOCK_Y = (int)(H / OUTPUT_TILE_H);
 
 	dim3 grid(BLOCK_X, BLOCK_Y, 1);
-	printf("BLOCK_X: %d, BLOCK_Y: %d, REG_BUFFER_SIZE: %d\n", BLOCK_X, BLOCK_Y, REG_BUFFER_SIZE);
+	printf("BLOCK_X: %d, BLOCK_Y: %d, REG_BUFFER_SIZE: %d, NUM_THX_PER_SEG %d\n", BLOCK_X, BLOCK_Y, REG_BUFFER_SIZE, NUM_THX_PER_SEG);
 
 	// Shared memory size
 	size_t inter_size = OUTPUT_TILE_H * OUTPUT_TILE_W * IC_STRIDE * sizeof(float);
@@ -140,10 +145,20 @@ int main(int argc, char const *argv[])
 	    // 	H, W, C, C_stride
 	    // );
 
-	    // less_CTA_backup.cuh, less_CTA_together.cuh, less_CTA_startover.cuh
-	    DepthConvFused_2_kernel0 <H, W, IC, OC, 
+	    // less_CTA_backup.cuh
+    	// DepthConvFused_2_kernel0 <H, W, IC, OC,
+	    // 							IC_STRIDE, OC_STRIDE,
+	    // 							REG_BUFFER_SIZE, OC_STEP> <<<grid, block, shared_size>>>(
+	    // 	input,
+	    // 	filter_d, filter_1,
+	    // 	output
+	    // );
+
+    	// less_CTA_together.cuh, less_CTA_startover.cuh
+	    DepthConvFused_2_kernel0 <H, W, IC, OC,
 	    							IC_STRIDE, OC_STRIDE,
-	    							REG_BUFFER_SIZE, OC_STEP> <<<grid, block, shared_size>>> (
+	    							REG_BUFFER_SIZE, OC_STEP,
+	    							NUM_THX_PER_SEG> <<<grid, block, shared_size>>> (
 	    	input,
 	    	filter_d, filter_1,
 	    	output

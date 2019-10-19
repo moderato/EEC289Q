@@ -1,5 +1,4 @@
 // Fix this value in a foreseeable future.
-#define BLOCK_Y_SIZE 4
 #define FILTER_H 3
 #define FILTER_W 3
 #define BUFFER_STRIDE 2 // The stride the buffer moves each time
@@ -7,8 +6,11 @@
 #define STEP_OUTPUT_TILE_W 2 // e.g. EACH BLOCK EACH STEP reads a 4x4xIC_stride chunk and computes a 2x2xIC_stride chunk in stage 1
 #define STEP_READ_TILE_H (STEP_OUTPUT_TILE_H + FILTER_H - 1)
 #define STEP_READ_TILE_W (STEP_OUTPUT_TILE_W + FILTER_W - 1) // The tile size of input data needed in one step, e.g. read 4x4 to compute 2x2
+#define BLOCK_DIM_Y (STEP_OUTPUT_TILE_H * STEP_OUTPUT_TILE_W)
 
 /********************* Can be changed *********************/
+#define BLOCK_DIM_X 32
+
 #define OUTPUT_TILE_H 4
 #define OUTPUT_TILE_W 8
 
@@ -238,12 +240,11 @@ __device__ void spaceFillingCalculation(int loop, bool& isTall,
   _s_w_coord = _s_orig_w + isTall * (2 - 3 * (step_h % 2)) * BUFFER_STRIDE;
 }
 
-template<int IC_stride, int OC>
+template<int IC_stride, int OC, int NUM_THX_PER_SEG>
 __device__ void loadBlockGlobalToRegister(const float* src, float* dst, 
-                                          int src_offset, int dst_offset,
-                                          int num_thx_per_seg) {
-  int stride = blockDim.x / num_thx_per_seg * blockDim.y * OC;
-  int steps = IC_stride / (blockDim.x / num_thx_per_seg * blockDim.y);
+                                          int src_offset, int dst_offset) {
+  int stride = BLOCK_DIM_X / NUM_THX_PER_SEG * BLOCK_DIM_Y * OC;
+  int steps = IC_stride / (BLOCK_DIM_X / NUM_THX_PER_SEG * BLOCK_DIM_Y);
 
 #pragma unroll
   for (int num_steps = 0, offset = src_offset; num_steps < steps; num_steps++, offset += stride) {
@@ -251,12 +252,11 @@ __device__ void loadBlockGlobalToRegister(const float* src, float* dst,
   }
 }
 
-template<int IC_stride, int OC_stride>
+template<int IC_stride, int OC_stride, int NUM_THX_PER_SEG>
 __device__ void loadBlockRegisterToShared(float* src, float* dst, 
-                                          int src_offset, int dst_offset,
-                                          int num_thx_per_seg) {
-  int stride = blockDim.x / num_thx_per_seg * blockDim.y * OC_stride;
-  int steps = IC_stride / (blockDim.x / num_thx_per_seg * blockDim.y);
+                                          int src_offset, int dst_offset) {
+  int stride = BLOCK_DIM_X / NUM_THX_PER_SEG * BLOCK_DIM_Y * OC_stride;
+  int steps = IC_stride / (BLOCK_DIM_X / NUM_THX_PER_SEG * BLOCK_DIM_Y);
 
 #pragma unroll
   for (int num_steps = 0, offset = dst_offset; num_steps < steps; num_steps++, offset += stride) {
