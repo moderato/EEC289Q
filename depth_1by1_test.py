@@ -100,7 +100,7 @@ def depthwise_conv2d_with_workload_nhwc(batch, in_channel, in_size, channel_mult
         with tvm.target.create(device):
             # declare
             # (algo = 0)
-            DepthwiseConv2d = topi.cuda.depthwise_conv2d.depthwise_conv2d_cuda(autotvm.get_config(), Input, Filter, (stride_w, stride_h), (1, 1), dilation=1, algo=0) if default_schedule else topi.nn.depthwise_conv2d_nhwc(Input, Filter, stride=[stride_h, stride_w], padding=padding, dilation=1)
+            DepthwiseConv2d = topi.cuda.depthwise_conv2d.depthwise_conv2d_cuda(autotvm.get_config(), Input, Filter, (stride_w, stride_h), (1, 1), dilation=1, algo=cudnn_algo) if default_schedule else topi.nn.depthwise_conv2d_nhwc(Input, Filter, stride=[stride_h, stride_w], padding=padding, dilation=1)
             # ScaleShift = topi.nn.scale_shift_nhwc(DepthwiseConv2d, Scale, Shift)
             # Relu = topi.nn.relu(ScaleShift)
 
@@ -243,7 +243,7 @@ def depthwise_conv2d_with_workload_nhwc_auto(batch, in_channel, in_size, channel
 
     check_device("cuda")
 
-def conv2d_nhwc(batch, in_channel, in_size, num_filter, kernel, stride, padding="SAME", dtype="float32", default_schedule=False, save_data=False, model_name=None, input_feature=None):
+def conv2d_nhwc(batch, in_channel, in_size, num_filter, kernel, stride, padding="SAME", dtype="float32", default_schedule=False, cudnn_algo=-1, save_data=False, model_name=None, input_feature=None):
     in_height = in_width = in_size
 
     a_shape = (batch, in_channel, in_height, in_width) if default_schedule else (batch, in_height, in_width, in_channel) # NCHW for cudnn, NHWC for others
@@ -261,8 +261,8 @@ def conv2d_nhwc(batch, in_channel, in_size, num_filter, kernel, stride, padding=
         else:
             a_np = np.random.uniform(size=a_shape).astype(dtype)
         w_np = np.random.uniform(size=w_shape).astype(dtype)
-        print("^^^^^^^^^^^^^")
-        print(w_np[0:2,0:128,0,0])
+        # print("^^^^^^^^^^^^^")
+        # print(w_np[0:2,0:128,0,0])
         # Borrow NCHW for cudnn
         b_np = topi.testing.conv2d_nchw_python(a_np, w_np, stride, padding) if default_schedule else topi.testing.conv2d_nhwc_python(a_np, w_np, stride, padding)
         b_np = np.float32(b_np)
@@ -308,7 +308,7 @@ def conv2d_nhwc(batch, in_channel, in_size, num_filter, kernel, stride, padding=
         print("Running on target: %s" % device)
 
         with tvm.target.create(device):
-            B = topi.cuda.conv2d.conv2d_cuda(autotvm.get_config(), A, W, stride, 0, dilation=1, algo=0) if default_schedule else topi.nn.conv2d_nhwc(A, W, stride, padding, dilation=1)
+            B = topi.cuda.conv2d.conv2d_cuda(autotvm.get_config(), A, W, stride, 0, dilation=1, algo=cudnn_algo) if default_schedule else topi.nn.conv2d_nhwc(A, W, stride, padding, dilation=1)
             s = topi.cuda.schedule_conv2d_nchw_cuda(None, [B]) if default_schedule else schedule_conv2d_nhwc([B], A)
 
         ctx = tvm.context(device, 0)
@@ -384,33 +384,45 @@ def conv2d_nhwc_auto(batch, in_channel, in_size, num_filter, kernel, stride, pad
     for device in ['cuda']:
         check_device(device)
 
-def test_depthwise_conv2d():
+def test_depthwise_conv2d(save_data=False):
     # depthwise_1by1_fused(1, 32, 112, 1, 3, 1, 32, layout="NCHW")
 
     default_schedule = True
-    save_data = False
-    output_data = depthwise_conv2d_with_workload_nhwc(1, 32, 112, 1, 3, 1, default_schedule=default_schedule, save_data=save_data) # 51.62us, cudnn 93.53us
+    cudnn_algo = -1
+
+    if save_data:
+        output_data = depthwise_conv2d_with_workload_nhwc(1, 32, 112, 1, 3, 1, default_schedule=default_schedule, save_data=save_data) # 51.62us, cudnn 93.53us
+        conv2d_nhwc(1, 32, 112, 32, 1, 1, default_schedule=default_schedule, save_data=save_data, input_feature=output_data) # 53.023us, cudnn 49.10us
+
+        # output_data = depthwise_conv2d_with_workload_nhwc(1, 128, 56, 1, 3, 1, default_schedule=default_schedule, save_data=save_data) # 45.26us, cudnn 61.90us
+        # conv2d_nhwc(1, 128, 56, 128, 1, 1, default_schedule=default_schedule, save_data=save_data, input_feature=output_data) # 132.06us, cudnn 70.42us
+
+        # output_data = depthwise_conv2d_with_workload_nhwc(1, 256, 28, 1, 3, 1, default_schedule=default_schedule, save_data=save_data) # 24.70us, cudnn 44.10us
+        # conv2d_nhwc(1, 256, 28, 256, 1, 1, default_schedule=default_schedule, save_data=save_data, input_feature=output_data) # 134.21us, cudnn 74.89us
+
+        # output_data = depthwise_conv2d_with_workload_nhwc(1, 512, 14, 1, 3, 1, default_schedule=default_schedule, save_data=save_data) # 11.48us, cudnn 25.23us
+        # conv2d_nhwc(1, 512, 14, 512, 1, 1, default_schedule=default_schedule, save_data=save_data, input_feature=output_data) # 145.21us, cudnn 90.64us
+
+    else:
+        # depthwise_conv2d_with_workload_nhwc(1, 32, 112, 1, 3, 1, default_schedule=default_schedule, cudnn_algo=cudnn_algo) # 51.62us, cudnn 93.53us, 84.40us
+        # depthwise_conv2d_with_workload_nhwc(1, 128, 56, 1, 3, 1, default_schedule=default_schedule, cudnn_algo=cudnn_algo) # 45.26us, cudnn 61.90us, 58.51us
+        # depthwise_conv2d_with_workload_nhwc(1, 256, 28, 1, 3, 1, default_schedule=default_schedule, cudnn_algo=cudnn_algo) # 24.70us, cudnn 44.10us, 32.85us
+        # depthwise_conv2d_with_workload_nhwc(1, 512, 14, 1, 3, 1, default_schedule=default_schedule, cudnn_algo=cudnn_algo) # 11.48us, cudnn 25.23us, 21.45us
+        conv2d_nhwc(1, 32, 112, 32, 1, 1, default_schedule=default_schedule, cudnn_algo=cudnn_algo) # 53.023us, cudnn 49.10us, 50.73us
+        conv2d_nhwc(1, 128, 56, 128, 1, 1, default_schedule=default_schedule, cudnn_algo=cudnn_algo) # 132.06us, cudnn 70.42us, 92.22us
+        conv2d_nhwc(1, 256, 28, 256, 1, 1, default_schedule=default_schedule, cudnn_algo=cudnn_algo) # 134.21us, cudnn 74.89us, 98.59us
+        conv2d_nhwc(1, 512, 14, 512, 1, 1, default_schedule=default_schedule, cudnn_algo=cudnn_algo) # 145.21us, cudnn 90.64us, 119.81us
+
+
     # depthwise_conv2d_with_workload_nhwc_auto(1, 32, 112, 1, 3, 1, default_schedule=default_schedule) # 51.05us,
-    conv2d_nhwc(1, 32, 112, 32, 1, 1, default_schedule=default_schedule, save_data=save_data, input_feature=output_data) # 53.023us, cudnn 49.10us
+    # depthwise_conv2d_with_workload_nhwc_auto(1, 128, 56, 1, 3, 1, default_schedule=default_schedule) # 45.08us,
+    # depthwise_conv2d_with_workload_nhwc_auto(1, 256, 28, 1, 3, 1, default_schedule=default_schedule) # 24.63us,
+    # depthwise_conv2d_with_workload_nhwc_auto(1, 512, 14, 1, 3, 1, default_schedule=default_schedule) # 10.94us,
     # conv2d_nhwc_auto(1, 32, 112, 32, 1, 1, default_schedule=default_schedule) # 52.68us
+    # conv2d_nhwc_auto(1, 128, 56, 128, 1, 1, default_schedule=default_schedule) # 133.17us
+    # conv2d_nhwc_auto(1, 256, 28, 256, 1, 1, default_schedule=default_schedule) # 149.73us
+    # conv2d_nhwc_auto(1, 512, 14, 512, 1, 1, default_schedule=default_schedule) # 145.21us
 
-
-    # output_data = depthwise_conv2d_with_workload_nhwc(1, 128, 56, 1, 3, 1, default_schedule=default_schedule, save_data=save_data) # 45.26us, cudnn 61.90us
-    # # depthwise_conv2d_with_workload_nhwc_auto(1, 128, 56, 1, 3, 1, default_schedule=default_schedule) # 45.08us,
-    # conv2d_nhwc(1, 128, 56, 128, 1, 1, default_schedule=default_schedule, save_data=save_data, input_feature=output_data) # 132.06us, cudnn 70.42us
-    # # conv2d_nhwc_auto(1, 128, 56, 128, 1, 1, default_schedule=default_schedule) # 133.17us
-
-
-    # output_data = depthwise_conv2d_with_workload_nhwc(1, 256, 28, 1, 3, 1, default_schedule=default_schedule, save_data=save_data) # 24.70us, cudnn 44.10us
-    # # # depthwise_conv2d_with_workload_nhwc_auto(1, 256, 28, 1, 3, 1, default_schedule=default_schedule) # 24.63us,
-    # conv2d_nhwc(1, 256, 28, 256, 1, 1, default_schedule=default_schedule, save_data=save_data, input_feature=output_data) # 134.21us, cudnn 74.89us
-    # # # conv2d_nhwc_auto(1, 256, 28, 256, 1, 1, default_schedule=default_schedule) # 149.73us
-
-
-    # output_data = depthwise_conv2d_with_workload_nhwc(1, 512, 14, 1, 3, 1, default_schedule=default_schedule, save_data=save_data) # 11.48us, cudnn 25.23us
-    # # # depthwise_conv2d_with_workload_nhwc_auto(1, 512, 14, 1, 3, 1, default_schedule=default_schedule) # 10.94us,
-    # conv2d_nhwc(1, 512, 14, 512, 1, 1, default_schedule=default_schedule, save_data=save_data, input_feature=output_data) # 145.21us, cudnn 90.64us
-    # # # conv2d_nhwc_auto(1, 512, 14, 512, 1, 1, default_schedule=default_schedule) # 145.21us
 
 if __name__ == "__main__":
     test_depthwise_conv2d()

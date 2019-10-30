@@ -21,6 +21,8 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
   int _g_coord, _s_coord, _s_h_coord, _s_w_coord;
   int _s_orig_h, _s_orig_w, shared_idx;
   bool isTall;
+  int _g_h_blk = bly * OUTPUT_TILE_H;
+  int _g_w_blk = blx * OUTPUT_TILE_W;
 
   // Shared memory
   extern __shared__ float s[];
@@ -43,8 +45,9 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
     prefetchInputData<H, W, IC, IC_stride>(Input,                 /* Input src    */
                                           Conv2dFilter_1_shared, /* Shared dst   */
                                           buffer,                /* Register dst */
+                                          _g_h_blk, _g_w_blk,
                                           _g_coord, _s_coord,
-                                          _g_oc_step);
+                                          _g_oc_step, true);
 
     //////////////////////////// Loop ////////////////////////////
     // Load from RMem to SMem
@@ -56,14 +59,15 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
       __syncthreads();
 
       // Calculate the coordinates for space filling looping
-      spaceFillingCalculation(loop, isTall,
-                              _s_orig_h, _s_orig_w,
-                              _s_h_coord, _s_w_coord);
+      spaceFillingShared(loop, isTall,
+                        _s_orig_h, _s_orig_w,
+                        _s_h_coord, _s_w_coord);
 
       // Depthwise and store the result and store result to RMem
       shared_idx = thx + 
               (_s_orig_w + (thy % STEP_OUTPUT_TILE_W)) * IC_stride + 
               (_s_orig_h + (thy / STEP_OUTPUT_TILE_H)) * IC_stride * OUTPUT_TILE_W;
+
       depthwiseConvSingleNum<IC_stride>(Conv2dFilter_1_shared,
                                         filter,
                                         DepthwiseConv2dOutput_0_local,
@@ -75,12 +79,19 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
         loadWrapper<H, W, IC, IC_stride>(Input, buffer,
                                           isTall,
                                           false, /* Load to register: false = not to SMem */
+                                          _g_h_blk, _g_w_blk,
                                           _g_coord, _s_coord,
                                           _s_h_coord, _s_w_coord,
                                           _g_oc_step);
       }
       __syncthreads();
     }
+
+    if (blx == 0 && bly == 0 && thy == 0 && thx == 0 && _g_oc_step == 0) {
+          for (int i = 0; i < 16; i++) {
+            printf("coord: %d, intermediate: %f\n", i * IC_stride, intermediate[i * IC_stride]);
+          }
+        }
 
     // gmem to rmem
     int _g_input_offset = _g_oc_step * OC * OC_stride + /* origin */
@@ -143,7 +154,7 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
   }
 
   for (int _g_oc_step = 0; _g_oc_step < (OC / OC_stride); _g_oc_step++) {
-    int idx = getOutputBaseCoord<W, OC, OC_stride>(_g_oc_step);
+    int idx = getOutputBaseCoord<W, OC, OC_stride>(_g_oc_step, _g_h_blk, _g_w_blk);
 
 #pragma unroll
     for (int i = 0, a = 0, b = _g_oc_step * 2; 

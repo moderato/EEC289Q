@@ -10,6 +10,7 @@
 
 /********************* Can be changed *********************/
 #define BLOCK_DIM_X 32
+#define OC_STRIDE_SPLIT 16 // Split OC_stride of 1x1 filter
 
 #define OUTPUT_TILE_H 4
 #define OUTPUT_TILE_W 8
@@ -20,11 +21,18 @@
 #define STEP_H ((READ_TILE_H - STEP_READ_TILE_H) / STEP_OUTPUT_TILE_H + 1)
 #define STEP_W ((READ_TILE_W - STEP_READ_TILE_W) / STEP_OUTPUT_TILE_W + 1) // The step (number of stride moving) needed for a row/col, e.g. reading 4x4 in a 6x6 tile takes 2 steps in a row and 2 steps in a col
 
-#define OC_STRIDE_SPLIT 16 // Split OC_stride of 1x1 filter
+// #define OUTPUT_SIZE (OUTPUT_TILE_H * OUTPUT_TILE_W)
 
-#define OUTPUT_W_TILE_NUM 1
-#define OUTPUT_H_TILE_NUM 1 // Num of output tiles in H/W direction
+#define CTA_STEP_NUM 4 // Total number of 2x2 HW block to be output per CTA
+#define CTA_STEP_NUM_EACH_ROUND 4
+#define CTA_ROUND_NUM (CTA_STEP_NUM / CTA_STEP_NUM_EACH_ROUND)
+
+#define OUTPUT_SIZE_HW (CTA_STEP_NUM_EACH_ROUND * STEP_OUTPUT_TILE_H * STEP_OUTPUT_TILE_W) // Total HW output, e.g. 4 * 2 * 2 = 16 
 /**********************************************************/
+
+__device__ bool isLastLoop(int round, int loop) {
+  return (round * CTA_STEP_NUM_EACH_ROUND + loop + 1) == CTA_STEP_NUM;
+}
 
 __device__ void getSharedHW(bool isTall, int& h, int& w) {
   // 2x2 warps over H and W, 16 threads over C dimension
@@ -48,9 +56,9 @@ __device__ void getGlobalSharedHW(bool isTall,
   int h = 0, w = 0;
   getSharedHW(isTall, h, w);
   _g_h = _g_h_blk + _s_h_coord + h;
-  _g_w = _g_w_blk + _s_w_coord + w;
+  _g_w = _g_w_blk + _s_w_coord + w; // _s_h/w_coord: HW origin of long/tall tile (2x4 or 4x2 by default) in SMem
   _s_h =          + _s_h_coord + h;
-  _s_w =          + _s_w_coord + w;
+  _s_w =          + _s_w_coord + w; // h/w: offset for each thread
 }
 
 __device__ void loadFloat4(const float* src, float* dst, int src_offset, int dst_offset) {
@@ -83,12 +91,20 @@ __device__ int getGlobalCoordFloat2(int _g_h, int _g_w, int IC_step) {
 }
 
 template<int W, int OC, int OC_stride>
-__device__ int getOutputBaseCoord(int _g_oc_step) {
-  int _g_h_blk = blockIdx.y * OUTPUT_TILE_H;
-  int _g_w_blk = blockIdx.x * OUTPUT_TILE_W;
-
+__device__ int getOutputBaseCoord(int _g_oc_step, int _g_h_blk, int _g_w_blk) {
   return (_g_h_blk + (threadIdx.y * 2 / OUTPUT_TILE_W)) * W * OC + 
       (_g_w_blk + (threadIdx.y * 2 % OUTPUT_TILE_W) + threadIdx.x / OC_STRIDE_SPLIT) * OC + 
+      _g_oc_step * OC_stride + 
+      threadIdx.x % OC_STRIDE_SPLIT;
+}
+
+template<int W, int OC, int OC_stride>
+__device__ int getOutputCoord(int _g_oc_step, int* _g_h_blks, int* _g_w_blks) {
+  int _g_h_blk = _g_h_blks[threadIdx.y / 2];
+  int _g_w_blk = _g_w_blks[threadIdx.y / 2];
+
+  return (_g_h_blk + (threadIdx.y % 2)) * W * OC + 
+      (_g_w_blk + threadIdx.x / OC_STRIDE_SPLIT) * OC + 
       _g_oc_step * OC_stride + 
       threadIdx.x % OC_STRIDE_SPLIT;
 }
@@ -115,8 +131,12 @@ __device__ void depthwiseConvSingleNum(float* Conv2dFilter_1_shared,
       int h = _s_orig_h + ry + (threadIdx.y / STEP_OUTPUT_TILE_W);
       int input_idx = threadIdx.x + IC_stride * ((w % STEP_READ_TILE_W) + 
                                                   (h % STEP_READ_TILE_H) * STEP_READ_TILE_W);
+
       DepthwiseConv2dOutput_0_local[0] += (
           Conv2dFilter_1_shared[input_idx] * filter[ry * FILTER_W + rx]);
+
+      // if (blockIdx.x == 0 && threadIdx.y == 2 && threadIdx.x == 0)
+      //    printf("intermediate: %f, w: %d, h: %d, input_idx: %d, _s_orig_h: %d, _s_orig_w: %d\n", DepthwiseConv2dOutput_0_local[0], w, h, input_idx, _s_orig_h, _s_orig_w);
     }
   }
 }
@@ -133,13 +153,13 @@ __device__ void loadGlobalWithBoundCheck(const float* src, float* dst,
 
 template<int H, int W, int IC, int IC_stride>
 __device__ void loadWrapper(const float* src, float* dst,
-                            bool isTall, 
+                            bool isTall,
                             bool toShared, /* Whether load global to SMem or RMem*/
+                            int _g_h_blk, int _g_w_blk,
                             int& _g_coord, int& _s_coord,
                             int _s_h_coord, int _s_w_coord,
-                            int IC_step) {
-  int _g_h_blk = blockIdx.y * OUTPUT_TILE_H;
-  int _g_w_blk = blockIdx.x * OUTPUT_TILE_W;
+                            int IC_step)
+{
   int _g_h, _g_w, _s_h, _s_w;
 
   // Get global and shared HW coord
@@ -173,17 +193,24 @@ __device__ void loadWrapper(const float* src, float* dst,
 
 template<int H, int W, int IC, int IC_stride>
 __device__ void prefetchInputData(const float* src, float* _s_dst, float* _r_dst,
+                                  int _g_h_blk, int _g_w_blk,
                                   int& _g_coord, int& _s_coord,
-                                  int IC_step) {
+                                  int IC_step, bool isTall) {
   // G->S
   int _s_h_coord = 0;
   int _s_w_coord = 0;
-  loadWrapper<H, W, IC, IC_stride>(src, _s_dst, true, true, _g_coord, _s_coord, _s_h_coord, _s_w_coord, IC_step);
+  loadWrapper<H, W, IC, IC_stride>(src, _s_dst,
+                                  isTall, true,
+                                  _g_h_blk, _g_w_blk,
+                                  _g_coord, _s_coord, _s_h_coord, _s_w_coord, IC_step);
 
   // G->R
   _s_h_coord = 0;
   _s_w_coord = BUFFER_STRIDE;
-  loadWrapper<H, W, IC, IC_stride>(src, _r_dst, true, false, _g_coord, _s_coord, _s_h_coord, _s_w_coord, IC_step);
+  loadWrapper<H, W, IC, IC_stride>(src, _r_dst,
+                                  isTall, false,
+                                  _g_h_blk, _g_w_blk,
+                                  _g_coord, _s_coord, _s_h_coord, _s_w_coord, IC_step);
 }
 
 /*********************
@@ -223,9 +250,11 @@ v-->-->-->-->|
              |
 x<--<--<--<--v
 *********************/
-__device__ void spaceFillingCalculation(int loop, bool& isTall,
-                                        int& _s_orig_h, int& _s_orig_w,
-                                        int& _s_h_coord, int& _s_w_coord) {
+
+// Return the shared origin and tile HW coordinates given a loop step in shared space filling, e.g. (OUTPUT_TILE_H*OUTPUT_TILE_W)
+__device__ void spaceFillingShared(int loop, bool& isTall,
+                                  int& _s_orig_h, int& _s_orig_w,
+                                  int& _s_h_coord, int& _s_w_coord) {
   int step_h = loop / STEP_W, step_w = loop % STEP_W;
 
   // The origin point (ref (0,0)) of the intermediate data tile to be written
@@ -235,9 +264,46 @@ __device__ void spaceFillingCalculation(int loop, bool& isTall,
   // If the input data tile to be read is tall or long
   isTall = (step_w != STEP_W - 1);
 
-  // The origin point (ref (0,0)) of the input data tile to be read
+  // The origin point (ref to (0,0)) of the input data tile to be read followed right after the 
   _s_h_coord = _s_orig_h + (!isTall) * 2 * BUFFER_STRIDE;
   _s_w_coord = _s_orig_w + isTall * (2 - 3 * (step_h % 2)) * BUFFER_STRIDE;
+}
+
+// Return the global start HW coordinates given a loop step in global space filling, e.g. (H*W)
+template<int total_step_num_h, int total_step_num_w>
+__device__ void spaceFillingGlobal(int loop, bool& isTall, int& start_h, int& start_w) {
+  int step_h = loop / total_step_num_w, step_w = loop % total_step_num_w;
+
+  // The origin point (ref (0,0)) of the intermediate data tile to be written
+  start_h = step_h * BUFFER_STRIDE;
+  start_w = (step_h % 2) ? (BUFFER_STRIDE * (total_step_num_w - 1 - step_w)) : (BUFFER_STRIDE * step_w); // Even rows in increase order, odd rows in decrease order.
+
+  // If the input data tile to be read is tall or long
+  // isTall is determined by GLOBAL SPACE FILLING
+  isTall = (step_w != total_step_num_w - 1);
+}
+
+/********************
+Intermediate data write pattern
+|+++|+++|+++|+++|+++|+++|+++|+++|+++|+++|+++|+++|
+| 0 | 0 | 1 | 1 | 2 | 2 | 3 | 3 | 4 | 4 | 5 | 5 |
+|+++|+++|+++|+++|+++|+++|+++|+++|+++|+++|+++|+++| ...
+| 0 | 0 | 1 | 1 | 2 | 2 | 3 | 3 | 4 | 4 | 5 | 5 |
+|+++|+++|+++|+++|+++|+++|+++|+++|+++|+++|+++|+++|
+********************/
+template<int total_step_num_h, int total_step_num_w>
+__device__ void spaceFillingSharedPersistent(int loop, bool isTall,
+                                            int& _s_orig_h, int& _s_orig_w,
+                                            int& _s_h_coord, int& _s_w_coord) {
+  int global_row = loop / total_step_num_w;
+
+  // The origin point (ref (0,0)) of the intermediate data tile to be WRITTEN to
+  _s_orig_h = 0;
+  _s_orig_w = (loop % CTA_STEP_NUM_EACH_ROUND) * BUFFER_STRIDE; // Simply read in order
+
+  // The origin point (ref to (0,0)) of the input data tile to be READ right after this compute
+  _s_h_coord = _s_orig_h + (!isTall) * 2 * BUFFER_STRIDE;
+  _s_w_coord = _s_orig_w + isTall * (2 - 3 * (global_row % 2)) * BUFFER_STRIDE;
 }
 
 template<int IC_stride, int OC, int NUM_THX_PER_SEG>
@@ -263,9 +329,3 @@ __device__ void loadBlockRegisterToShared(float* src, float* dst,
     loadFloat4(src, dst, 4 * num_steps, offset);
   }
 }
-
-
-
-
-
-

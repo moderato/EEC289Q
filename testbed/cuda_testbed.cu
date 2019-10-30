@@ -5,8 +5,8 @@
 // #include "half_param_165.cuh"
 // #include "general_more_reuse.cuh"
 // #include "less_CTA_backup.cuh"
-// #include "less_CTA_together.cuh"
-#include "less_CTA_startover.cuh"
+#include "less_CTA_together.cuh"
+// #include "less_CTA_persistent.cuh"
 
 
 /**************** Input & output sizes ****************/
@@ -52,9 +52,20 @@
 #ifndef BLOCK_DIM_Y
 	#define BLOCK_DIM_Y 4
 #endif
+#ifndef OUTPUT_W_TILE_NUM
+	#define OUTPUT_W_TILE_NUM 1
+#endif
+#ifndef OUTPUT_H_TILE_NUM
+	#define OUTPUT_H_TILE_NUM 1
+#endif
+
 #define REG_BUFFER_SIZE (IC_STRIDE * OC_STRIDE / BLOCK_DIM_X / BLOCK_DIM_Y)
 #define OC_STEP (OC / OC_STRIDE_SPLIT)
 #define NUM_THX_PER_SEG (OC_STRIDE / 4)
+
+// New params: calculate the start OUTPUT HW for this CTA
+#define total_step_num_h (H / STEP_OUTPUT_TILE_H)
+#define total_step_num_w (W / STEP_OUTPUT_TILE_W)
 
 using namespace std;
 
@@ -63,19 +74,21 @@ int main(int argc, char const *argv[])
 	// Block and grid size
 	dim3 block(BLOCK_DIM_X, BLOCK_DIM_Y, 1);
 
-	// 1D grid
-	// int BLOCK_X = (int)(H / OUTPUT_TILE_H) * (int)(W / OUTPUT_TILE_W), BLOCK_Y = 1;
 	// 2D grid
-	int BLOCK_X = (int)(W / OUTPUT_TILE_W), BLOCK_Y = (int)(H / OUTPUT_TILE_H);
-
+	int BLOCK_X = (int)(W / (OUTPUT_TILE_W * OUTPUT_W_TILE_NUM)), BLOCK_Y = (int)(H / (OUTPUT_TILE_H * OUTPUT_H_TILE_NUM));
+	// Shared memory size
+	size_t inter_size = OUTPUT_TILE_H * OUTPUT_TILE_W * IC_STRIDE * sizeof(float);
+	
+	// // 1D grid
+	// int BLOCK_X = (int)((int)(H / STEP_OUTPUT_TILE_H) * (int)(W / STEP_OUTPUT_TILE_W) / CTA_STEP_NUM), BLOCK_Y = 1;
+	// size_t inter_size = OUTPUT_SIZE_HW * IC_STRIDE * sizeof(float);
+	
 	dim3 grid(BLOCK_X, BLOCK_Y, 1);
 	printf("BLOCK_X: %d, BLOCK_Y: %d, REG_BUFFER_SIZE: %d, NUM_THX_PER_SEG %d\n", BLOCK_X, BLOCK_Y, REG_BUFFER_SIZE, NUM_THX_PER_SEG);
 
-	// Shared memory size
-	size_t inter_size = OUTPUT_TILE_H * OUTPUT_TILE_W * IC_STRIDE * sizeof(float);
 	size_t filter_1_size = IC_STRIDE * OC_STRIDE * sizeof(float);
 	size_t shared_size = inter_size + filter_1_size;
-	printf("Intermediate shared size: %d, filter size: %d\n", 
+	printf("Intermediate shared size: %d, 1x1 filter size: %d\n",
 		OUTPUT_TILE_H * OUTPUT_TILE_W * IC_STRIDE, IC_STRIDE * OC_STRIDE);
 
 	// Sizes
@@ -118,7 +131,7 @@ int main(int argc, char const *argv[])
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
 	float ms = 0;
-	int repeatition = 1000;
+	int repeatition = 1;
 
     for (int i = 0; i < repeatition; i++) {
     	cudaMemset(output, 0, output_shape * sizeof(float));
@@ -154,8 +167,8 @@ int main(int argc, char const *argv[])
 	    // 	output
 	    // );
 
-    	// less_CTA_together.cuh, less_CTA_startover.cuh
-	    DepthConvFused_2_kernel0 <H, W, IC, OC,
+    	// less_CTA_together.cuh
+    	DepthConvFused_2_kernel0 <H, W, IC, OC,
 	    							IC_STRIDE, OC_STRIDE,
 	    							REG_BUFFER_SIZE, OC_STEP,
 	    							NUM_THX_PER_SEG> <<<grid, block, shared_size>>> (
@@ -163,6 +176,17 @@ int main(int argc, char const *argv[])
 	    	filter_d, filter_1,
 	    	output
 	    );
+
+    	// // less_CTA_persistent.cuh
+	    // DepthConvFused_2_kernel0 <H, W, IC, OC,
+	    // 							IC_STRIDE, OC_STRIDE,
+	    // 							REG_BUFFER_SIZE, OC_STEP,
+	    // 							NUM_THX_PER_SEG,
+	    // 							total_step_num_h, total_step_num_w> <<<grid, block, shared_size>>> (
+	    // 	input,
+	    // 	filter_d, filter_1,
+	    // 	output
+	    // );
 
 
 	    cudaEventRecord(stop);
@@ -184,7 +208,7 @@ int main(int argc, char const *argv[])
     result = (float*)malloc(output_shape * sizeof(float));
     cudaMemcpy(result, output, output_shape * sizeof(float), cudaMemcpyDeviceToHost);
     int count = 0;
-    for(int i = 0; i < 512; i++) {
+    for(int i = 0; i < 257; i++) {
     	// printf("%d, %f, %lf\n", i, result[i], tmp2[i]);
     	// assert(abs(result[i] - (float)tmp2[i]) < 1e-4);
     	if (abs(result[i] - (float)tmp2[i]) > 1e-3) {
