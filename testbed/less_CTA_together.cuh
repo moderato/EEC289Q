@@ -74,6 +74,12 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
                                         _s_orig_h, _s_orig_w);
       intermediate[shared_idx] = DepthwiseConv2dOutput_0_local[0];
 
+      // if (shared_idx == 128 && bly == 0 && blx == 0 && _g_oc_step == 0) {
+      //     printf("loop: %d, thy: %d, thx: %d, _g_coord: %d, _s_coord: %d, _s_orig_h: %d, _s_orig_w: %d, _s_h_coord: %d, _s_w_coord: %d, intermediate: %d\n", 
+      //       loop, thy, thx, _g_coord, _s_coord, _s_orig_h, _s_orig_w, _s_h_coord, _s_w_coord, DepthwiseConv2dOutput_0_local[0]);
+      //   }
+
+
       if (loop + 1 != STEP_H * STEP_W) {
         // Load from global to register
         loadWrapper<H, W, IC, IC_stride>(Input, buffer,
@@ -87,8 +93,8 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
       __syncthreads();
     }
 
-    if (blx == 0 && bly == 0 && thy == 0 && thx == 0 && _g_oc_step == 0) {
-          for (int i = 0; i < 16; i++) {
+    if (bly == 0 && blx == 0 && thy == 0 && thx == 0 && _g_oc_step == 0) {
+          for (int i = 0; i < 32; i++) {
             printf("coord: %d, intermediate: %f\n", i * IC_stride, intermediate[i * IC_stride]);
           }
         }
@@ -118,27 +124,29 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
         int inter_offset = thy * 64 + (thx / OC_STRIDE_SPLIT) * IC_stride + i;
         int filter_offset = (thx % OC_STRIDE_SPLIT) + OC_stride * i;
 
-        // // 8 = BLOCK_DIM_Y * 32 / OC_STRIDE_SPLIT, which is basically fixed
-        // #pragma unroll
-        //   for (int j = 0, a = iter * 2, b = inter_offset; 
-        //         j < OUTPUT_TILE_H * OUTPUT_TILE_W / 8; 
-        //         j++, a += OC_STEP, b += 8 * OC_stride) {
-        //     Conv2dOutput_0_local[a]     += intermediate[b] * Conv2dFilter_1_shared[filter_offset];
-        //     Conv2dOutput_0_local[a+1]   += intermediate[b] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
-        //   }
+        // 8 = BLOCK_DIM_Y * 32 / OC_STRIDE_SPLIT, which is basically fixed
+        #pragma unroll
+          for (int j = 0, b = iter * 2, a = inter_offset; 
+                j < OUTPUT_TILE_H * OUTPUT_TILE_W / 8; 
+                j++, b += OC_STEP, a += 8 * OC_stride) {
+            Conv2dOutput_0_local[b]     += intermediate[a] * Conv2dFilter_1_shared[filter_offset];
+            Conv2dOutput_0_local[b+1]   += intermediate[a] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+            // if (bly == 0 && blx == 0 && thy == 0 && thx == 0 && iter == 0 && b == 16)
+            //   printf("i: %d, j: %d, a: %d, b: %d, inter_offset: %d, filter_offset: %d, inter: %f, filter: %f, accumulator: %f\n", i, j, a, b, inter_offset, filter_offset, intermediate[a], Conv2dFilter_1_shared[filter_offset], Conv2dOutput_0_local[b]);
+          }
 
-        // Replace the above with the below to get a ~15us speedup for W=8,H=4
-        {
-          Conv2dOutput_0_local[iter * 2 + 0]  += intermediate[inter_offset]       * Conv2dFilter_1_shared[filter_offset];
-          Conv2dOutput_0_local[iter * 2 + 1]  += intermediate[inter_offset]       * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
-          Conv2dOutput_0_local[iter * 2 + 8]  += intermediate[256 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
-          Conv2dOutput_0_local[iter * 2 + 9]  += intermediate[256 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+        // // Replace the above with the below to get a ~15us speedup for W=8,H=4
+        // {
+        //   Conv2dOutput_0_local[iter * 2 + 0]  += intermediate[inter_offset]       * Conv2dFilter_1_shared[filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 1]  += intermediate[inter_offset]       * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 8]  += intermediate[256 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 9]  += intermediate[256 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
 
-          Conv2dOutput_0_local[iter * 2 + 16] += intermediate[512 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
-          Conv2dOutput_0_local[iter * 2 + 17] += intermediate[512 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
-          Conv2dOutput_0_local[iter * 2 + 24] += intermediate[768 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
-          Conv2dOutput_0_local[iter * 2 + 25] += intermediate[768 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
-        }
+        //   Conv2dOutput_0_local[iter * 2 + 16] += intermediate[512 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 17] += intermediate[512 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 24] += intermediate[768 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 25] += intermediate[768 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+        // }
       }
 
       __syncthreads();
@@ -160,8 +168,16 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
     for (int i = 0, a = 0, b = _g_oc_step * 2; 
           i < OUTPUT_TILE_H * OUTPUT_TILE_W / 8;
           i++, a += BLOCK_DIM_Y * 2 / OUTPUT_TILE_W * W * OC, b += 8) {
+
+      // if (bly == 0 && blx == 0 && thy == 2 && thx == 0 && b == 0)
+      //         printf("output index: %d, idx: %d, a: %d, _g_h_blk: %d, _g_w_blk: %d, accumulator: %f\n", idx+a, idx, a, _g_h_blk, _g_w_blk, Conv2dOutput_0_local[b]);
+
+      if (idx + a == 14336) {
+           printf("idx: %d, blx: %d, thy: %d, thx: %d, _g_oc_step: %d, i: %d, b: %d, result: %f\n", idx, blx, thy, thx, _g_oc_step, i, b, Conv2dOutput_0_local[b]);
+         }
+
         Conv2dOutput_0[idx + a]     =   Conv2dOutput_0_local[b];
-        Conv2dOutput_0[idx + a + 16]  =   Conv2dOutput_0_local[b + 1];
+        Conv2dOutput_0[idx + a + OC_STRIDE_SPLIT]  =   Conv2dOutput_0_local[b + 1];
     }
   }
 }
