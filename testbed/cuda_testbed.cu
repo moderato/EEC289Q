@@ -80,7 +80,7 @@ int main(int argc, char const *argv[])
 	// size_t inter_size = OUTPUT_TILE_H * OUTPUT_TILE_W * IC_STRIDE * sizeof(float);
 	
 	// 1D grid
-	int BLOCK_X = (int)((int)(H / STEP_OUTPUT_TILE_H) * (int)(W / STEP_OUTPUT_TILE_W) / STEP_PER_CTA), BLOCK_Y = 1;
+	int BLOCK_X = (int)(((int)(H / STEP_OUTPUT_TILE_H) * (int)(W / STEP_OUTPUT_TILE_W) - 1) / STEP_PER_CTA) + 1, BLOCK_Y = 1;
 	size_t inter_size = OUTPUT_SIZE_HW * IC_STRIDE * sizeof(float);
 	
 	dim3 grid(BLOCK_X, BLOCK_Y, 1);
@@ -88,6 +88,7 @@ int main(int argc, char const *argv[])
 
 	size_t filter_1_size = IC_STRIDE * OC_STRIDE * sizeof(float);
 	size_t shared_size = inter_size + filter_1_size;
+	// size_t shared_size = (STEP_READ_TILE_H * STEP_READ_TILE_W * IC_STRIDE) * sizeof(float) + inter_size + filter_1_size;
 	printf("Intermediate shared size: %d, 1x1 filter size: %d\n",
 		OUTPUT_TILE_H * OUTPUT_TILE_W * IC_STRIDE, IC_STRIDE * OC_STRIDE);
 
@@ -131,7 +132,7 @@ int main(int argc, char const *argv[])
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
 	float ms = 0;
-	int repeatition = 1000;
+	int repeatition = 1;
 
     for (int i = 0; i < repeatition; i++) {
     	cudaMemset(output, 0, output_shape * sizeof(float));
@@ -207,7 +208,7 @@ int main(int argc, char const *argv[])
     result = (float*)malloc(output_shape * sizeof(float));
     cudaMemcpy(result, output, output_shape * sizeof(float), cudaMemcpyDeviceToHost);
     int count = 0;
-    for(int i = 0; i < 14336; i++) {
+    for(int i = 0; i < 2048; i++) {
     	// printf("%d, %f, %lf\n", i, result[i], tmp2[i]);
     	// assert(abs(result[i] - (float)tmp2[i]) < 1e-4);
     	if (abs(result[i] - (float)tmp2[i]) > 1e-3) {

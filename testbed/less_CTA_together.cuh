@@ -93,11 +93,11 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
       __syncthreads();
     }
 
-    if (bly == 0 && blx == 0 && thy == 0 && thx == 0 && _g_oc_step == 0) {
-          for (int i = 0; i < 32; i++) {
-            printf("coord: %d, intermediate: %f\n", i * IC_stride, intermediate[i * IC_stride]);
-          }
-        }
+    // if (bly == 0 && blx == 0 && thy == 0 && thx == 0 && _g_oc_step == 0) {
+    //       for (int i = 0; i < 32; i++) {
+    //         printf("coord: %d, intermediate: %f\n", i * IC_stride, intermediate[i * IC_stride]);
+    //       }
+    //     }
 
     // gmem to rmem
     int _g_input_offset = _g_oc_step * OC * OC_stride + /* origin */
@@ -137,15 +137,25 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
 
         // // Replace the above with the below to get a ~15us speedup for W=8,H=4
         // {
-        //   Conv2dOutput_0_local[iter * 2 + 0]  += intermediate[inter_offset]       * Conv2dFilter_1_shared[filter_offset];
-        //   Conv2dOutput_0_local[iter * 2 + 1]  += intermediate[inter_offset]       * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
-        //   Conv2dOutput_0_local[iter * 2 + 8]  += intermediate[256 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
-        //   Conv2dOutput_0_local[iter * 2 + 9]  += intermediate[256 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 0] += intermediate[inter_offset] * Conv2dFilter_1_shared[filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 1] += intermediate[inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 8] += intermediate[256 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 9] += intermediate[256 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
 
         //   Conv2dOutput_0_local[iter * 2 + 16] += intermediate[512 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
         //   Conv2dOutput_0_local[iter * 2 + 17] += intermediate[512 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
         //   Conv2dOutput_0_local[iter * 2 + 24] += intermediate[768 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
         //   Conv2dOutput_0_local[iter * 2 + 25] += intermediate[768 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+
+        //   Conv2dOutput_0_local[iter * 2 + 32] += intermediate[1024 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 33] += intermediate[1024 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 40] += intermediate[1280 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 41] += intermediate[1280 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+
+        //   Conv2dOutput_0_local[iter * 2 + 48] += intermediate[1536 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 49] += intermediate[1536 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 56] += intermediate[1792 + inter_offset] * Conv2dFilter_1_shared[filter_offset];
+        //   Conv2dOutput_0_local[iter * 2 + 57] += intermediate[1792 + inter_offset] * Conv2dFilter_1_shared[OC_STRIDE_SPLIT + filter_offset];
         // }
       }
 
@@ -172,9 +182,9 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
       // if (bly == 0 && blx == 0 && thy == 2 && thx == 0 && b == 0)
       //         printf("output index: %d, idx: %d, a: %d, _g_h_blk: %d, _g_w_blk: %d, accumulator: %f\n", idx+a, idx, a, _g_h_blk, _g_w_blk, Conv2dOutput_0_local[b]);
 
-      if (idx + a == 14336) {
-           printf("idx: %d, blx: %d, thy: %d, thx: %d, _g_oc_step: %d, i: %d, b: %d, result: %f\n", idx, blx, thy, thx, _g_oc_step, i, b, Conv2dOutput_0_local[b]);
-         }
+      // if (idx + a == 14336) {
+      //      printf("idx: %d, blx: %d, thy: %d, thx: %d, _g_oc_step: %d, i: %d, b: %d, result: %f\n", idx, blx, thy, thx, _g_oc_step, i, b, Conv2dOutput_0_local[b]);
+      //    }
 
         Conv2dOutput_0[idx + a]     =   Conv2dOutput_0_local[b];
         Conv2dOutput_0[idx + a + OC_STRIDE_SPLIT]  =   Conv2dOutput_0_local[b + 1];

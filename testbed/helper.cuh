@@ -26,9 +26,27 @@
 #define ROUND_PER_CTA 1
 #define STEP_PER_ROUND_CTA 7
 #define STEP_PER_CTA (ROUND_PER_CTA * STEP_PER_ROUND_CTA) // Total number of 2x2 HW block to be output per CTA
-#define OUTPUT_SIZE_HW (STEP_PER_ROUND_CTA * STEP_OUTPUT_TILE_H * STEP_OUTPUT_TILE_W) // Total HW output per round, e.g. 4 * 2 * 2 = 16 
-/**********************************************************/
+#define OUTPUT_SIZE_HW (STEP_PER_ROUND_CTA * STEP_OUTPUT_TILE_H * STEP_OUTPUT_TILE_W) // Total HW output per round, e.g. 4 * 2 * 2 = 16
 
+/**************** Pointer-level Load Functions ********************/
+__device__ void loadFloat4(const float* src, float* dst, int src_offset, int dst_offset) {
+  reinterpret_cast<float4*>(dst + dst_offset)[0] = ((float4*)(src + src_offset))[0];
+}
+
+__device__ void loadFloat4(float* src, float* dst, int src_offset, int dst_offset) {
+  reinterpret_cast<float4*>(dst + dst_offset)[0] = reinterpret_cast<float4*>(src + src_offset)[0];
+}
+
+__device__ void loadFloat2(const float* src, float* dst, int src_offset, int dst_offset) {
+  reinterpret_cast<float2*>(dst + dst_offset)[0] = ((float2*)(src + src_offset))[0];
+}
+
+__device__ void loadFloat2(float* src, float* dst, int src_offset, int dst_offset) {
+  reinterpret_cast<float2*>(dst + dst_offset)[0] = reinterpret_cast<float2*>(src + src_offset)[0];
+}
+/*******************************************************************/
+
+/*********************** Coordinate Functions **********************/
 __device__ void getSharedHW(bool isTall, int& h, int& w) {
   // 2x2 warps over H and W, 16 threads over C dimension
   if (isTall) {
@@ -54,30 +72,6 @@ __device__ void getGlobalSharedHW(bool isTall,
   _g_w = _g_w_blk + _s_w_coord + w; // _s_h/w_coord: HW origin of long/tall tile (2x4 or 4x2 by default) in SMem
   _s_h = (_g_h) % STEP_READ_TILE_H;
   _s_w = (_g_w) % STEP_READ_TILE_W; // h/w: offset for each thread
-}
-
-__device__ void loadFloat4(const float* src, float* dst, int src_offset, int dst_offset) {
-  reinterpret_cast<float4*>(dst + dst_offset)[0] = ((float4*)(src + src_offset))[0];
-}
-
-__device__ void loadFloat4(float* src, float* dst, int src_offset, int dst_offset) {
-  reinterpret_cast<float4*>(dst + dst_offset)[0] = reinterpret_cast<float4*>(src + src_offset)[0];
-}
-
-// *******************************************************************/
-
-__device__ bool isLastLoop(int step) {
-  return ((step + 1) == STEP_PER_ROUND_CTA);
-}
-
-__device__ bool isLastLoop(int round, int step) {
-  return ((round * STEP_PER_ROUND_CTA + step + 1) == STEP_PER_CTA);
-}
-
-template<int H, int W>
-__device__ bool inGlobalRange(int _g_h, int _g_w) {
-  // 1: padding
-  return 1 <= _g_h && (_g_h < H + 1) && 1 <= _g_w && (_g_w < W + 1);
 }
 
 // SMem coord in a form of circular buffer
@@ -107,16 +101,121 @@ __device__ int getOutputBaseCoord(int _g_oc_step, int _g_h_blk, int _g_w_blk) {
 
 // For less_CTA_persistent.cuh
 template<int W, int OC, int OC_stride>
-__device__ int getOutputCoord(int _g_oc_step, int _g_h_blk, int _g_w_blk) {
-  return (_g_h_blk + (threadIdx.y % 2)) * W * OC + 
-      (_g_w_blk + threadIdx.x / OC_STRIDE_SPLIT) * OC + 
+__device__ int getOutputCoord(int _g_oc_step, int* _g_h_blks, int* _g_w_blks, int step) {
+  return (step >= STEP_PER_ROUND_CTA) ? INT_MAX :
+      (_g_h_blks[step] + (threadIdx.y % 2)) * W * OC + 
+      (_g_w_blks[step] + threadIdx.x / OC_STRIDE_SPLIT) * OC + 
       _g_oc_step * OC_stride + 
       threadIdx.x % OC_STRIDE_SPLIT;
 }
 
+template<int H, int W>
+__device__ bool inGlobalRange(int _g_h, int _g_w) {
+  // 1: padding, to be parameterized
+  return 1 <= _g_h && (_g_h < H + 1) && 1 <= _g_w && (_g_w < W + 1);
+}
+/*******************************************************************/
+
+/******************** Space Filling Functions **********************/
+/*********************
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
+|   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |  | r | r | r | r |   |   |  
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
+|   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |  | r | r | r | r |   |   |  
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
+|   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
+|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->
+|   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
+|   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
+|   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
+
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
+| s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
+| s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
+| s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
+|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|
+| s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
+|   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
+|   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |
+|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
+0-->-->-->-->|
+             |
+|<--<--<--<--v
+|
+v-->-->-->-->|
+             |
+x<--<--<--<--v
+*********************/
+
+// Return the shared origin and tile HW coordinates given a loop step in shared space filling, e.g. (OUTPUT_TILE_H*OUTPUT_TILE_W)
+__device__ void spaceFillingShared(int loop, bool& isTall,
+                                  int& _s_orig_h, int& _s_orig_w,
+                                  int& _s_h_coord, int& _s_w_coord)
+{
+  int step_h = loop / STEP_W, step_w = loop % STEP_W;
+
+  // The origin point (ref (0,0)) of the intermediate data tile to be written
+  _s_orig_h = step_h * BUFFER_STRIDE;
+  _s_orig_w = (step_h % 2) ? (BUFFER_STRIDE * (STEP_W - 1 - step_w)) : (BUFFER_STRIDE * step_w); // Even rows in increase order, odd rows in decrease order.
+
+  // If the input data tile to be read is tall or long
+  isTall = (step_w != STEP_W - 1);
+
+  // The origin point (ref to **(_s_orig_h, _s_orig_w)**) of the input data tile to be read followed right after the 
+  _s_h_coord = _s_orig_h + (!isTall) * 2 * BUFFER_STRIDE;
+  _s_w_coord = _s_orig_w + isTall * (2 - 3 * (step_h % 2)) * BUFFER_STRIDE;
+}
+
+// Return the global start HW coordinates given a loop step in global space filling, e.g. (H*W)
+template<int total_step_num_h, int total_step_num_w>
+__device__ void spaceFillingGlobal(int loop, bool& isTall, int& start_h, int& start_w)
+{
+  int step_h = loop / total_step_num_w, step_w = loop % total_step_num_w;
+
+  // The origin point (ref (0,0)) of the intermediate data tile to be written
+  start_h = step_h * BUFFER_STRIDE;
+  start_w = (step_h % 2) ? (BUFFER_STRIDE * (total_step_num_w - 1 - step_w)) : (BUFFER_STRIDE * step_w); // Even rows in increase order, odd rows in decrease order.
+
+  // If the input data tile to be read is tall or long
+  // isTall is determined by GLOBAL SPACE FILLING
+  isTall = (step_w != total_step_num_w - 1);
+}
+
+template<int total_step_num_h, int total_step_num_w>
+__device__ void spaceFillingSharedPersistent(int loop, bool isTall,
+                                              int& _s_h_coord, int& _s_w_coord) 
+{
+  int global_row = loop / total_step_num_w;
+
+  // The origin point (ref to **(0,0)**) of the NEXT input data tile to be READ right after this compute
+  _s_h_coord = (!isTall) * 2 * BUFFER_STRIDE;
+  _s_w_coord = isTall * (2 - 3 * (global_row % 2)) * BUFFER_STRIDE;
+}
+
+__device__ int globalStep(int round, int step) {
+  return round * STEP_PER_ROUND_CTA + step;
+}
+
+__device__ bool isLastStep(int step) {
+  return ((step + 1) == STEP_PER_ROUND_CTA);
+}
+
+__device__ bool isLastStep(int round, int step) {
+  return ((globalStep(round, step) + 1) == STEP_PER_CTA);
+}
+/*******************************************************************/
+
+/***************** Block-level Loading Functions *******************/
 template<int IC, int IC_stride>
 __device__ void loadDepthwiseFilterGlobalToRegister(const float* src, float* dst, int IC_step) {
-#pragma unroll
+  #pragma unroll
   for (int ry = 0; ry < FILTER_H; ++ry) {
     for (int rx = 0; rx < FILTER_W; ++rx) {
       dst[ry * FILTER_W + rx] = src[threadIdx.x + IC_stride * IC_step + (ry * IC * FILTER_W) + (rx * IC)];
@@ -128,8 +227,9 @@ template<int IC_stride>
 __device__ void depthwiseConvSingleNum(float* Conv2dFilter_1_shared, 
                                       float* filter,
                                       float* DepthwiseConv2dOutput_0_local, 
-                                      int orig_h, int orig_w) {
-#pragma unroll
+                                      int orig_h, int orig_w)
+{
+  #pragma unroll
   for (int ry = 0; ry < FILTER_H; ++ry) {
     for (int rx = 0; rx < FILTER_W; ++rx) {
       int w = orig_w + rx + (threadIdx.y % STEP_OUTPUT_TILE_W);
@@ -151,7 +251,8 @@ __device__ void depthwiseConvSingleNum(float* Conv2dFilter_1_shared,
 template<int H, int W>
 __device__ void loadGlobalWithBoundCheck(const float* src, float* dst,
                                           int offset,
-                                          int _g_h, int _g_w) {
+                                          int _g_h, int _g_w) 
+{
   ((float2*)(dst))[0] = 
       inGlobalRange<H, W>(_g_h, _g_w) ? 
         ((float2*)(src + offset))[0] : 
@@ -222,9 +323,6 @@ __device__ void prefetchInputData(const float* src, float* _s_dst, float* _r_dst
                                   _g_h_blk, _g_w_blk,
                                   _g_coord, _s_coord, _s_h_coord, _s_w_coord, IC_step);
 
-  // if (blockIdx.y == 0 && blockIdx.x == 0 && _s_coord == 128)
-  //     printf("*******************\n");
-
   // G->R
   _s_h_coord = 0;
   _s_w_coord = BUFFER_STRIDE;
@@ -232,98 +330,16 @@ __device__ void prefetchInputData(const float* src, float* _s_dst, float* _r_dst
                                   isTall, false,
                                   _g_h_blk, _g_w_blk,
                                   _g_coord, _s_coord, _s_h_coord, _s_w_coord, IC_step);
-
-  // if (blockIdx.y == 0 && blockIdx.x == 0 && _s_coord == 128)
-  //     printf("^^^^^^^^^^^^^^^^^^\n");
-}
-
-/*********************
-|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-|   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |  | r | r | r | r |   |   |  
-|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-|   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |  | r | r | r | r |   |   |  
-|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-|   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
-|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->
-|   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
-|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-|   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
-|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-|   |   | r | r | s | s |  | r | r | s | s | s | s |  | s | s | s | s |   |   |  | s | s | s | s |   |   |  
-|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  
-
-|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-| s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
-|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-| s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
-|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-| s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
-|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|->|+++|+++|+++|+++|+++|+++|
-| s | s | s | s |   |   |  | s | s | s | s | r | r |  |   |   | s | s | s | s |
-|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-|   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |
-|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-|   |   |   |   |   |   |  |   |   |   |   |   |   |  |   |   |   |   |   |   |
-|+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|  |+++|+++|+++|+++|+++|+++|
-
-0-->-->-->-->|
-             |
-|<--<--<--<--v
-|
-v-->-->-->-->|
-             |
-x<--<--<--<--v
-*********************/
-
-// Return the shared origin and tile HW coordinates given a loop step in shared space filling, e.g. (OUTPUT_TILE_H*OUTPUT_TILE_W)
-__device__ void spaceFillingShared(int loop, bool& isTall,
-                                  int& _s_orig_h, int& _s_orig_w,
-                                  int& _s_h_coord, int& _s_w_coord) {
-  int step_h = loop / STEP_W, step_w = loop % STEP_W;
-
-  // The origin point (ref (0,0)) of the intermediate data tile to be written
-  _s_orig_h = step_h * BUFFER_STRIDE;
-  _s_orig_w = (step_h % 2) ? (BUFFER_STRIDE * (STEP_W - 1 - step_w)) : (BUFFER_STRIDE * step_w); // Even rows in increase order, odd rows in decrease order.
-
-  // If the input data tile to be read is tall or long
-  isTall = (step_w != STEP_W - 1);
-
-  // The origin point (ref to **(_s_orig_h, _s_orig_w)**) of the input data tile to be read followed right after the 
-  _s_h_coord = _s_orig_h + (!isTall) * 2 * BUFFER_STRIDE;
-  _s_w_coord = _s_orig_w + isTall * (2 - 3 * (step_h % 2)) * BUFFER_STRIDE;
-}
-
-// Return the global start HW coordinates given a loop step in global space filling, e.g. (H*W)
-template<int total_step_num_h, int total_step_num_w>
-__device__ void spaceFillingGlobal(int loop, bool& isTall, int& start_h, int& start_w) {
-  int step_h = loop / total_step_num_w, step_w = loop % total_step_num_w;
-
-  // The origin point (ref (0,0)) of the intermediate data tile to be written
-  start_h = step_h * BUFFER_STRIDE;
-  start_w = (step_h % 2) ? (BUFFER_STRIDE * (total_step_num_w - 1 - step_w)) : (BUFFER_STRIDE * step_w); // Even rows in increase order, odd rows in decrease order.
-
-  // If the input data tile to be read is tall or long
-  // isTall is determined by GLOBAL SPACE FILLING
-  isTall = (step_w != total_step_num_w - 1);
-}
-
-template<int total_step_num_h, int total_step_num_w>
-__device__ void spaceFillingSharedPersistent(int loop, bool isTall,
-                                            int& _s_h_coord, int& _s_w_coord) {
-  int global_row = loop / total_step_num_w;
-
-  // The origin point (ref to **(0,0)**) of the NEXT input data tile to be READ right after this compute
-  _s_h_coord = (!isTall) * 2 * BUFFER_STRIDE;
-  _s_w_coord = isTall * (2 - 3 * (global_row % 2)) * BUFFER_STRIDE;
 }
 
 template<int IC_stride, int OC, int NUM_THX_PER_SEG>
 __device__ void loadBlockGlobalToRegister(const float* src, float* dst, 
-                                          int src_offset, int dst_offset) {
+                                          int src_offset, int dst_offset)
+{
   int stride = BLOCK_DIM_X / NUM_THX_PER_SEG * BLOCK_DIM_Y * OC;
   int steps = IC_stride / (BLOCK_DIM_X / NUM_THX_PER_SEG * BLOCK_DIM_Y);
 
-#pragma unroll
+  #pragma unroll
   for (int num_steps = 0, offset = src_offset; num_steps < steps; num_steps++, offset += stride) {
     loadFloat4(src, dst, offset, 4 * num_steps);
   }
@@ -331,11 +347,12 @@ __device__ void loadBlockGlobalToRegister(const float* src, float* dst,
 
 template<int IC_stride, int OC_stride, int NUM_THX_PER_SEG>
 __device__ void loadBlockRegisterToShared(float* src, float* dst, 
-                                          int src_offset, int dst_offset) {
+                                          int src_offset, int dst_offset) 
+{
   int stride = BLOCK_DIM_X / NUM_THX_PER_SEG * BLOCK_DIM_Y * OC_stride;
   int steps = IC_stride / (BLOCK_DIM_X / NUM_THX_PER_SEG * BLOCK_DIM_Y);
 
-#pragma unroll
+  #pragma unroll
   for (int num_steps = 0, offset = dst_offset; num_steps < steps; num_steps++, offset += stride) {
     loadFloat4(src, dst, 4 * num_steps, offset);
   }
