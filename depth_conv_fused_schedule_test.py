@@ -117,191 +117,74 @@ def schedule_depth_conv_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
     step_num_w = 2
     output_tile_size_h = output_step_tile_size_h * step_num_h;
     output_tile_size_w = output_step_tile_size_w * step_num_w;
-    # num_vthread_x = 3
-    # num_vthread_y = 3
 
     s[PaddedInput].compute_inline()
     PaddedSharedInput = s.cache_read(PaddedInput, "shared", [Intermediate])
-    # FS_d = s.cache_read(F_d, "shared", [Intermediate])
-    # FL_d = s.cache_read(FS_d, "local", [Intermediate])
     FL_d = s.cache_read(F_d, "local", [Intermediate])
     FS_1 = s.cache_read(F_1, "shared", [Out])
-    # FL_1 = s.cache_read(FS_1, "local", [Out])
 
     # # Intermediate output
     IntermediateShared = Intermediate
     s[Intermediate].set_scope("shared")
     # s[Intermediate].double_buffer()
     DepthwiseLocalAccumulator = s.cache_write(Intermediate, "local")
-    # IntermediateLocalRead = s.cache_read(Intermediate, "local", [Out])
     # # Output
     Output = Out
     OL = s.cache_write(Out, "local")
     
     block_x = tvm.thread_axis("blockIdx.x")
     block_y = tvm.thread_axis("blockIdx.y")
-    thread_x = tvm.thread_axis("threadIdx.x")
-    thread_y = tvm.thread_axis("threadIdx.y")
+    thread_x = tvm.thread_axis((0, num_thread_x), "threadIdx.x")
+    thread_y = tvm.thread_axis((0, num_thread_y), "threadIdx.y")
 
-    # vthread_x = tvm.thread_axis((0, num_vthread_x), "vthread", name="vx")
-    # vthread_y = tvm.thread_axis((0, num_vthread_y), "vthread", name="vy")
+    num_vthread_x = step_num_h * step_num_w
+    vthread_x = tvm.thread_axis((0, num_vthread_x), "vthread", name="vthread_x")
 
     ######## Final output
     # print(s[Output].op.axis, s[Output].op.reduce_axis)
     n, h, w, c = s[Output].op.axis
-    xoc, xic = s[Output].split(c, factor=num_thread_x)
-    # -----------------------------------------------------
+    c_outer, c_inner = s[Output].split(c, factor=num_thread_x)
+    s[Output].reorder(c_inner, c_outer)
     yo, xo, y_tile, x_tile = s[Output].tile(h, w, x_factor=output_tile_size_w, y_factor=output_tile_size_h)
+    # --------------
     y_step, x_step, y_step_tile, x_step_tile = s[Output].tile(y_tile, x_tile, x_factor=output_step_tile_size_w, y_factor=output_step_tile_size_h)
-    s[Output].reorder(n, yo, xo, y_step_tile, x_step_tile, xic, xoc, y_step, x_step)
-    # # thread_x/y
-    fused_b = s[Output].fuse(y_step_tile, x_step_tile)
-    # s[Output].bind(fused_b, thread_y)
-    # s[Output].bind(xic, thread_x)
-    # thread_block
+    s[Output].reorder(n, yo, xo, y_step_tile, x_step_tile, c_inner, c_outer, y_step, x_step) # Don't bind c_outer
+    fused_b = s[Output].fuse(y_step_tile, x_step_tile) 
     fused_tb = s[Output].fuse(n, yo, xo)
-    s[Output].bind(fused_tb, block_x)
-    # -----------------------------------------------------
-    # yo, xo, yi, xi = s[Output].tile(h, w, x_factor=output_step_tile_size_w, y_factor=output_step_tile_size_h)
-    # s[Output].reorder(n, yo, xo, xoc, yi, xi, xic)
-    # # thread_x/y
-    # fused_b = s[Output].fuse(yi, xi)
+    # fused_v = s[Output].fuse(y_step, x_step)
+    # s[Output].bind(fused_v, vthread_x)
     # s[Output].bind(fused_b, thread_y)
-    # s[Output].bind(xic, thread_x)
-    # # thread_block
-    # fused_tb = s[Output].fuse(n, yo, xo, xoc)
+    # s[Output].bind(c_inner, thread_x) # problem!!
     # s[Output].bind(fused_tb, block_x)
-    # # Write to global
-    # s[OL].compute_at(s[Output], xic) #############
-    # -----------------------------------------------------
+    # print(s[Output].op.axis, s[Output].op.reduce_axis)
+    # --------------
 
-    ######## Local output
-    # stride
+    # ######## Local output
+    # s[OL].compute_at(s[Output], c_inner)
     # print(s[OL].op.axis, s[OL].op.reduce_axis)
     xocc, xicc = s[OL].split(s[OL].op.reduce_axis[0], factor=num_thread_x)
-    # ConvOutputAccumulator = s.rfactor(OL, xocc)
-    # print(s[OL].op.axis, s[OL].op.reduce_axis)
+    # # print(s[OL].op.axis, s[OL].op.reduce_axis)
     n, h, w, oc = s[OL].op.axis
     ooc, ioc = s[OL].split(oc, factor=num_thread_x)
-    hw = s[OL].fuse(h, w)
-    # rc = s[OL].op.reduce_axis[0]
-    # s[OL].reorder(rc, n, ooc, hw, ioc)
-    s[OL].reorder(xocc, n, ooc, hw, ioc)
-    
-    # fused_b = s[OL].fuse(y_step_tile, x_step_tile)
+    # hw = s[OL].fuse(h, w)
+    # s[OL].reorder(n, xocc, ioc, hw, ooc) # e.g. hw = 16 (m), ioc = 32 (n), xicc = 32 (k)
+    # ohw, ihw = s[OL].split(hw, factor=num_vthread_x)
+    # s[OL].bind(ioc, thread_x)
+    # s[OL].bind(ihw, vthread_x)
+    # s[OL].bind(ihw, thread_y)
+    # # print(s[OL].op.axis, s[OL].op.reduce_axis)
 
-    # # Write to global
-    # s[OL].compute_at(s[Output], xic)
-        
-    # ####### ConvOutputAccumulator
-    # -----------------------------------------------------
-    # -----------------------------------------------------
-    # s[ConvOutputAccumulator].compute_at(s[OL], ooc)
-    # print(s[ConvOutputAccumulator].op.axis)
-    # stride, n, h, w, oc = s[ConvOutputAccumulator].op.axis
-    # crc = s[ConvOutputAccumulator].op.reduce_axis[0]
-    # # # print(crc)
-    # crc_nparts = 8 # int(num_thread_x / 4 / num_thread_y)
-    # if crc_nparts > 0:
-    #     crco, crci = s[ConvOutputAccumulator].split(crc, nparts=crc_nparts)
-    #     s[ConvOutputAccumulator].unroll(crci)
-    # else:
-    #     crco = o # No split
-    # -----------------------------------------------------
-
-    # -----------------------------------------------------
-    # ######### Intermediate
-    # s[IntermediateLocalRead].compute_at(s[ConvOutputAccumulator], crco)
-    # s[IntermediateLocalRead].compute_at(s[ConvOutputAccumulator], s[ConvOutputAccumulator].op.reduce_axis[0])
-
-    ########### Read intermediate to local
-    # # s[IntermediateLocalRead].vectorize(s[IntermediateLocalRead].op.axis[-1])
-    # s[IntermediateShared].compute_at(s[OL], rc)
-    n, h, w, c = s[IntermediateShared].op.axis
-    co, ci = s[IntermediateShared].split(c, factor=num_thread_x)
-    yo, xo, y_tile, x_tile = s[IntermediateShared].tile(h, w, x_factor=output_tile_size_w, y_factor=output_tile_size_h)
-    y_step, x_step, y_step_tile, x_step_tile = s[IntermediateShared].tile(y_tile, x_tile, x_factor=output_step_tile_size_w, y_factor=output_step_tile_size_h)
-    s[IntermediateShared].reorder(n, yo, xo, co, y_step, x_step, y_step_tile, x_step_tile, ci)
-    step_tile = s[IntermediateShared].fuse(y_step_tile, x_step_tile)
-    s[IntermediateShared].bind(ci, thread_x)
-    s[IntermediateShared].bind(step_tile, thread_y)
-    # fused_tbs = s[IntermediateShared].fuse(n, yo, xo)
-    # s[IntermediateShared].bind(fused_tbs, block_x)
-
-    # # Unrolling
-    # ry, rx = s[DepthwiseLocalAccumulator].op.reduce_axis
-    # s[DepthwiseLocalAccumulator].unroll(ry)
-    # s[DepthwiseLocalAccumulator].unroll(rx)
-    s[DepthwiseLocalAccumulator].compute_at(s[IntermediateShared], ci)
-
-    # # Load depthwise filter to local
-    # ry, rx = s[FL_d].op.reduce_axis
-    # s[FL_d].unroll(ry)
-    # s[FL_d].unroll(rx)
-    s[FL_d].compute_at(s[IntermediateShared], co)
-
-    # # ######## Shared Input
-    s[PaddedSharedInput].compute_at(s[IntermediateShared], co)
-    n, h, w, c = s[PaddedSharedInput].op.axis
-    co, ci = s[PaddedSharedInput].split(c, factor=num_thread_x)
-    yo, xo, y_tile, x_tile = s[PaddedSharedInput].tile(h, w, x_factor=output_step_tile_size_w, y_factor=output_step_tile_size_h)
-    s[PaddedSharedInput].reorder(n, yo, xo, co, y_tile, x_tile, ci)
-    tile = s[PaddedSharedInput].fuse(y_tile, x_tile)
-    s[PaddedSharedInput].bind(ci, thread_x)
-    s[PaddedSharedInput].bind(tile, thread_y)
-    # -----------------------------------------------------
-    # ######### Intermediate
-    # s[IntermediateLocalRead].compute_at(s[ConvOutputAccumulator], crco) 
-    # # s[ConvOutputAccumulator].op.reduce_axis[0]
-
-    # ############ Read intermediate to local
-    # # s[IntermediateLocalRead].vectorize(s[IntermediateLocalRead].op.axis[-1])
-    # s[IntermediateShared].compute_at(s[OL], rc)
-    # n, h, w, c = s[IntermediateShared].op.axis
-    # co, ci = s[IntermediateShared].split(c, factor=num_thread_x)
-    # hw = s[IntermediateShared].fuse(h, w)
-    # s[IntermediateShared].bind(ci, thread_x)
-    # s[IntermediateShared].bind(hw, thread_y)
-
-    # # # Unrolling
-    # ry, rx = s[DepthwiseLocalAccumulator].op.reduce_axis
-    # # s[DepthwiseLocalAccumulator].unroll(ry)
-    # # s[DepthwiseLocalAccumulator].unroll(rx)
-    # s[DepthwiseLocalAccumulator].compute_at(s[IntermediateShared], ci)
-
-    # ######## Shared Input
-    # s[PaddedSharedInput].compute_at(s[IntermediateShared], hw)
-    # s[FL_d].compute_at(s[ConvOutputAccumulator], hw)
-    # n, h, w, c = s[PaddedSharedInput].op.axis
-    # co, ci = s[PaddedSharedInput].split(c, factor=num_thread_x)
-    # s[PaddedSharedInput].reorder(co, n, h, w, ci)
-    # # # Old binding
-    # s[PaddedSharedInput].bind(ci, thread_x)
-    # _, w = s[PaddedSharedInput].split(w, factor=num_thread_y)
-    # s[PaddedSharedInput].bind(w, thread_y)
-    # # # # Vectorization, -~10 us in 2nd test case
-    # # cio, cii = s[PaddedSharedInput].split(ci, factor=4)
-    # # _, w = s[PaddedSharedInput].split(w, factor=4)
-    # # _, h = s[PaddedSharedInput].split(h, factor=num_thread_y)
-    # # fused_p = s[PaddedSharedInput].fuse(w, cio)
-    # # s[PaddedSharedInput].bind(fused_p, thread_x)
-    # # s[PaddedSharedInput].bind(h, thread_y)
-    # # s[PaddedSharedInput].vectorize(cii)
-    # -----------------------------------------------------
-
-    ######## Shared 1by1 filter
-    # # s[FS_1].compute_at(s[ConvOutputAccumulator], o) # Options: crco/o
-    # # s[FS_1].compute_at(s[ConvOutputAccumulator], conv_accumulator_ooc)
+    # ######## Shared 1by1 filter
     s[FS_1].compute_at(s[OL], ooc)
     h1, w1, i1, o1 = s[FS_1].op.axis
-    # # # Old binding
-    # io, ii = s[FS_1].split(i1, factor=num_thread_y)
-    # oo, oi = s[FS_1].split(o1, factor=num_thread_x)
-    # s[FS_1].bind(oi, thread_x)
-    # s[FS_1].bind(ii, thread_y)
+    # Old binding
+    io, ii = s[FS_1].split(i1, factor=num_thread_y)
+    oo, oi = s[FS_1].split(o1, factor=num_thread_x)
+    s[FS_1].bind(oi, thread_x)
+    s[FS_1].bind(ii, thread_y)
 
-    # # # Vectorization, -~18 us in 2nd test case
-    # # ioo, ioi(thread_y), (ii, oo)(thread_x), oi(4)
+    # # Vectorization, -~18 us in 2nd test case
+    # ioo, ioi(thread_y), (ii, oo)(thread_x), oi(4)
     # io, ii = s[FS_1].split(i1, factor=4)
     # ioo, ioi = s[FS_1].split(io, factor=num_thread_y)
     # oo, oi = s[FS_1].split(o1, factor=4)
@@ -309,6 +192,45 @@ def schedule_depth_conv_fused_nhwc(outs, nodes, params, NHWC_transpose=False):
     # s[FS_1].bind(ioi, thread_y)
     # s[FS_1].bind(fused_1, thread_x)
     # s[FS_1].vectorize(oi)
+
+    # ########### Read intermediate to local
+    # s[IntermediateShared].compute_at(s[OL], xocc)
+    # n, h, w, c = s[IntermediateShared].op.axis
+    # inter_co, inter_ci = s[IntermediateShared].split(c, factor=num_thread_x)
+    # yo, xo, y_tile, x_tile = s[IntermediateShared].tile(h, w, x_factor=output_tile_size_w, y_factor=output_tile_size_h)
+    # y_step, x_step, y_step_tile, x_step_tile = s[IntermediateShared].tile(y_tile, x_tile, x_factor=output_step_tile_size_w, y_factor=output_step_tile_size_h)
+    # s[IntermediateShared].reorder(n, yo, xo, inter_co, y_step, x_step, y_step_tile, x_step_tile, inter_ci)
+    # step_tile = s[IntermediateShared].fuse(y_step_tile, x_step_tile)
+    # s[IntermediateShared].bind(inter_ci, thread_x)
+    # s[IntermediateShared].bind(step_tile, thread_y)
+    # fused_tbs = s[IntermediateShared].fuse(n, yo, xo)
+    # s[IntermediateShared].bind(fused_tbs, block_x)
+
+    # # # Unrolling
+    # # ry, rx = s[DepthwiseLocalAccumulator].op.reduce_axis
+    # # s[DepthwiseLocalAccumulator].unroll(ry)
+    # # s[DepthwiseLocalAccumulator].unroll(rx)
+    # s[DepthwiseLocalAccumulator].compute_at(s[IntermediateShared], inter_ci)
+
+    # # # Load depthwise filter to local
+    # # ry, rx = s[FL_d].op.reduce_axis
+    # # s[FL_d].unroll(ry)
+    # # s[FL_d].unroll(rx)
+    # s[FL_d].compute_at(s[IntermediateShared], inter_co)
+    # h, w, c, mul = s[FL_d].op.axis
+    # oc, ic = s[FL_d].split(c, factor=num_thread_x)
+    # s[FL_d].reorder(oc, ic, h, w, mul)
+    # s[FL_d].bind(ic, thread_x)
+
+    # # # # ######## Shared Input
+    # n, h, w, c = s[PaddedSharedInput].op.axis
+    # co, ci = s[PaddedSharedInput].split(c, factor=num_thread_x)
+    # yo, xo, y_tile, x_tile = s[PaddedSharedInput].tile(h, w, x_factor=output_step_tile_size_w, y_factor=output_step_tile_size_h)
+    # s[PaddedSharedInput].reorder(co, n, yo, xo, y_tile, x_tile, ci)
+    # tile = s[PaddedSharedInput].fuse(y_tile, x_tile)
+    # s[PaddedSharedInput].bind(ci, thread_x)
+    # s[PaddedSharedInput].bind(tile, thread_y)
+    # s[PaddedSharedInput].compute_at(s[IntermediateShared], inter_co)
 
     return s
 

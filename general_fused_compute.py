@@ -114,7 +114,7 @@ def fused_convs(input_data, filters, resnet_block=False):
 			lambda b, i, j, c: tvm.sum(
 				(Input[b, i*stride_h + ry*dilation_h, j*stride_w + rx*dilation_w,
 							 tvm.indexdiv(c, channel_multiplier)].astype(out_dtype) *
-				(Filter[ry, rx, c%channel_multiplier, tvm.indexdiv(c, channel_multiplier)] if f.NHWC_transpose else Filter[ry, rx, tvm.indexdiv(c, channel_multiplier), tvm.indexmod(c, channel_multiplier)]).astype(out_dtype)),
+				(Filter[ry, rx, tvm.indexmod(c, channel_multiplier), tvm.indexdiv(c, channel_multiplier)] if f.NHWC_transpose else Filter[ry, rx, tvm.indexdiv(c, channel_multiplier), tvm.indexmod(c, channel_multiplier)]).astype(out_dtype)),
 				axis=[ry, rx]),
 			name='DepthwiseConv2dOutput_{}'.format(depthwise_count), tag="depthwise_nhwc")
 			depthwise_count += 1
