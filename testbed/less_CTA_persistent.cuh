@@ -209,12 +209,12 @@ __global__ void DepthConvFused_2_kernel0(const float* Input,
 			{
 				int idx = getOutputCoord<W, OC, OC_stride>(_g_oc_step, global_h_array, global_w_array, (thy / 2 + 2 * i));
 
-				if (idx == 1600) {
-					printf("OUTPUT_SIZE_HW: %d, round: %d, blx: %d, thy: %d, thx: %d, global_start_step: %d, idx: %d, _g_oc_step: %d, b: %d, i: %d, result: %f, step: %d, global_h: %d, global_w: %d\n", OUTPUT_SIZE_HW, round, blx, thy, thx, global_start_step, idx, _g_oc_step, b, i, Conv2dOutput_0_local[b], thy / 2 + 2 * i, global_h_array[thy / 2 + 2 * i], global_w_array[thy / 2 + 2 * i]);
-					// for (int k = 0; k < STEP_PER_ROUND_CTA; k++) {
-					// 	printf("k: %d, global_h: %d, global_w: %d\n", k, global_h_array[k], global_w_array[k]);
-					// }
-				}
+				// if (idx == 1600) {
+				// 	printf("OUTPUT_SIZE_HW: %d, round: %d, blx: %d, thy: %d, thx: %d, global_start_step: %d, idx: %d, _g_oc_step: %d, b: %d, i: %d, result: %f, step: %d, global_h: %d, global_w: %d\n", OUTPUT_SIZE_HW, round, blx, thy, thx, global_start_step, idx, _g_oc_step, b, i, Conv2dOutput_0_local[b], thy / 2 + 2 * i, global_h_array[thy / 2 + 2 * i], global_w_array[thy / 2 + 2 * i]);
+				// 	// for (int k = 0; k < STEP_PER_ROUND_CTA; k++) {
+				// 	// 	printf("k: %d, global_h: %d, global_w: %d\n", k, global_h_array[k], global_w_array[k]);
+				// 	// }
+				// }
 				if (idx < H * W * OC) {
 					Conv2dOutput_0[idx]	 					=   Conv2dOutput_0_local[b];
 					Conv2dOutput_0[idx + OC_STRIDE_SPLIT]  	=   Conv2dOutput_0_local[b + 1];

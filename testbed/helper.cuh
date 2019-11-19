@@ -12,21 +12,21 @@
 #define BLOCK_DIM_X 32
 #define OC_STRIDE_SPLIT 16 // Split OC_stride of 1x1 filter
 
-#define OUTPUT_TILE_H 4
-#define OUTPUT_TILE_W 8
+#define TOGETHER TRUE
 
-#define READ_TILE_H (OUTPUT_TILE_H + FILTER_H - 1)
-#define READ_TILE_W (OUTPUT_TILE_W + FILTER_W - 1) // The tile size of input data to be read, e.g. read 6x6 to compute 4x4
+  #define OUTPUT_TILE_H 8
+  #define OUTPUT_TILE_W 4
 
-#define STEP_H ((READ_TILE_H - STEP_READ_TILE_H) / STEP_OUTPUT_TILE_H + 1)
-#define STEP_W ((READ_TILE_W - STEP_READ_TILE_W) / STEP_OUTPUT_TILE_W + 1) // The step (number of stride moving) needed for a row/col, e.g. reading 4x4 in a 6x6 tile takes 2 steps in a row and 2 steps in a col
+  #define READ_TILE_H (OUTPUT_TILE_H + FILTER_H - 1)
+  #define READ_TILE_W (OUTPUT_TILE_W + FILTER_W - 1) // The tile size of input data to be read, e.g. read 6x6 to compute 4x4
 
-// #define OUTPUT_SIZE (OUTPUT_TILE_H * OUTPUT_TILE_W)
-
-#define ROUND_PER_CTA 1
-#define STEP_PER_ROUND_CTA 7
-#define STEP_PER_CTA (ROUND_PER_CTA * STEP_PER_ROUND_CTA) // Total number of 2x2 HW block to be output per CTA
-#define OUTPUT_SIZE_HW (STEP_PER_ROUND_CTA * STEP_OUTPUT_TILE_H * STEP_OUTPUT_TILE_W) // Total HW output per round, e.g. 4 * 2 * 2 = 16
+  #define STEP_H ((READ_TILE_H - STEP_READ_TILE_H) / STEP_OUTPUT_TILE_H + 1)
+  #define STEP_W ((READ_TILE_W - STEP_READ_TILE_W) / STEP_OUTPUT_TILE_W + 1) // The step (number of stride moving) needed for a row/col, e.g. reading 4x4 in a 6x6 tile takes 2 steps in a row and 2 steps in a col
+  // #define OUTPUT_SIZE (OUTPUT_TILE_H * OUTPUT_TILE_W)
+  #define ROUND_PER_CTA 1
+  #define STEP_PER_ROUND_CTA 8
+  #define STEP_PER_CTA (ROUND_PER_CTA * STEP_PER_ROUND_CTA) // Total number of 2x2 HW block to be output per CTA
+  #define OUTPUT_SIZE_HW (STEP_PER_ROUND_CTA * STEP_OUTPUT_TILE_H * STEP_OUTPUT_TILE_W) // Total HW output per round, e.g. 4 * 2 * 2 = 16
 
 /**************** Pointer-level Load Functions ********************/
 __device__ void loadFloat4(const float* src, float* dst, int src_offset, int dst_offset) {
@@ -229,13 +229,13 @@ __device__ void depthwiseConvSingleNum(float* Conv2dFilter_1_shared,
                                       float* DepthwiseConv2dOutput_0_local, 
                                       int orig_h, int orig_w)
 {
+  int tmp_w = orig_w + (threadIdx.y % STEP_OUTPUT_TILE_W);
+  int tmp_h = orig_h + (threadIdx.y / STEP_OUTPUT_TILE_W);
   #pragma unroll
   for (int ry = 0; ry < FILTER_H; ++ry) {
     for (int rx = 0; rx < FILTER_W; ++rx) {
-      int w = orig_w + rx + (threadIdx.y % STEP_OUTPUT_TILE_W);
-      int h = orig_h + ry + (threadIdx.y / STEP_OUTPUT_TILE_W);
-      int input_idx = threadIdx.x + IC_stride * ((w % STEP_READ_TILE_W) + 
-                                                  (h % STEP_READ_TILE_H) * STEP_READ_TILE_W);
+      int input_idx = threadIdx.x + IC_stride * (((tmp_w + rx) % STEP_READ_TILE_W) + 
+                                                  ((tmp_h + ry) % STEP_READ_TILE_H) * STEP_READ_TILE_W);
 
       DepthwiseConv2dOutput_0_local[0] += (
           Conv2dFilter_1_shared[input_idx] * filter[ry * FILTER_W + rx]);

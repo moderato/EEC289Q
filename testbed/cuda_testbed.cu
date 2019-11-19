@@ -5,8 +5,11 @@
 // #include "half_param_165.cuh"
 // #include "general_more_reuse.cuh"
 // #include "less_CTA_backup.cuh"
-// #include "less_CTA_together.cuh"
-#include "less_CTA_persistent.cuh"
+// #ifdef TOGETHER
+	#include "less_CTA_together.cuh"
+// #else
+// 	#include "less_CTA_persistent_backup.cuh"
+// #endif
 
 
 /**************** Input & output sizes ****************/
@@ -74,14 +77,16 @@ int main(int argc, char const *argv[])
 	// Block and grid size
 	dim3 block(BLOCK_DIM_X, BLOCK_DIM_Y, 1);
 
-	// // 2D grid
-	// int BLOCK_X = (int)(W / (OUTPUT_TILE_W * OUTPUT_W_TILE_NUM)), BLOCK_Y = (int)(H / (OUTPUT_TILE_H * OUTPUT_H_TILE_NUM));
-	// // Shared memory size
-	// size_t inter_size = OUTPUT_TILE_H * OUTPUT_TILE_W * IC_STRIDE * sizeof(float);
-	
+#ifdef TOGETHER
+	// 2D grid
+	int BLOCK_X = (int)(W / (OUTPUT_TILE_W * OUTPUT_W_TILE_NUM)), BLOCK_Y = (int)(H / (OUTPUT_TILE_H * OUTPUT_H_TILE_NUM));
+	// Shared memory size
+	size_t inter_size = OUTPUT_TILE_H * OUTPUT_TILE_W * IC_STRIDE * sizeof(float);
+#else
 	// 1D grid
 	int BLOCK_X = (int)(((int)(H / STEP_OUTPUT_TILE_H) * (int)(W / STEP_OUTPUT_TILE_W) - 1) / STEP_PER_CTA) + 1, BLOCK_Y = 1;
 	size_t inter_size = OUTPUT_SIZE_HW * IC_STRIDE * sizeof(float);
+#endif
 	
 	dim3 grid(BLOCK_X, BLOCK_Y, 1);
 	printf("BLOCK_X: %d, BLOCK_Y: %d, REG_BUFFER_SIZE: %d, NUM_THX_PER_SEG %d\n", BLOCK_X, BLOCK_Y, REG_BUFFER_SIZE, NUM_THX_PER_SEG);
@@ -132,7 +137,38 @@ int main(int argc, char const *argv[])
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
 	float ms = 0;
-	int repeatition = 1;
+	int repeatition = 1000;
+
+	int blockSize;   // The launch configurator returned block size 
+	int minGridSize; // The minimum grid size needed to achieve the 
+	               // maximum occupancy for a full device launch 
+
+	cudaOccupancyMaxPotentialBlockSize( &minGridSize, &blockSize, 
+	                                      	DepthConvFused_2_kernel0<H, W, IC, OC,
+			    							IC_STRIDE, OC_STRIDE,
+			    							REG_BUFFER_SIZE, OC_STEP,
+			    							NUM_THX_PER_SEG>, 0, 0);
+	printf("\n**************\nminGridSize: %d, blockSize: %d\n", minGridSize, blockSize);
+
+	// calculate theoretical occupancy
+	int maxActiveBlocks;
+	cudaOccupancyMaxActiveBlocksPerMultiprocessor( &maxActiveBlocks, 
+	                                             	DepthConvFused_2_kernel0<H, W, IC, OC,
+					    							IC_STRIDE, OC_STRIDE,
+					    							REG_BUFFER_SIZE, OC_STEP,
+					    							NUM_THX_PER_SEG>, blockSize, 0);
+
+	int device;
+	cudaDeviceProp props;
+	cudaGetDevice(&device);
+	cudaGetDeviceProperties(&props, device);
+
+	float occupancy = (maxActiveBlocks * blockSize / props.warpSize) / 
+	                (float)(props.maxThreadsPerMultiProcessor / 
+	                        props.warpSize);
+
+	printf("Launched blocks of size %d. Theoretical occupancy: %f\n**************\n\n", 
+	     blockSize, occupancy);
 
     for (int i = 0; i < repeatition; i++) {
     	cudaMemset(output, 0, output_shape * sizeof(float));
@@ -168,17 +204,18 @@ int main(int argc, char const *argv[])
 	    // 	output
 	    // );
 
-    	// // less_CTA_together.cuh
-    	// DepthConvFused_2_kernel0 <H, W, IC, OC,
-	    // 							IC_STRIDE, OC_STRIDE,
-	    // 							REG_BUFFER_SIZE, OC_STEP,
-	    // 							NUM_THX_PER_SEG> <<<grid, block, shared_size>>> (
-	    // 	input,
-	    // 	filter_d, filter_1,
-	    // 	output
-	    // );
-
-    	// less_CTA_persistent.cuh
+#ifdef TOGETHER
+    	// less_CTA_together.cuh
+    	DepthConvFused_2_kernel0 <H, W, IC, OC,
+	    							IC_STRIDE, OC_STRIDE,
+	    							REG_BUFFER_SIZE, OC_STEP,
+	    							NUM_THX_PER_SEG> <<<grid, block, shared_size>>> (
+	    	input,
+	    	filter_d, filter_1,
+	    	output
+	    );
+#else
+    	// less_CTA_persistent.cuh less_CTA_persistent_backup.cuh
 	    DepthConvFused_2_kernel0 <H, W, IC, OC,
 	    							IC_STRIDE, OC_STRIDE,
 	    							REG_BUFFER_SIZE, OC_STEP,
@@ -188,6 +225,7 @@ int main(int argc, char const *argv[])
 	    	filter_d, filter_1,
 	    	output
 	    );
+#endif
 
 	    cudaEventRecord(stop);
 
@@ -208,7 +246,7 @@ int main(int argc, char const *argv[])
     result = (float*)malloc(output_shape * sizeof(float));
     cudaMemcpy(result, output, output_shape * sizeof(float), cudaMemcpyDeviceToHost);
     int count = 0;
-    for(int i = 0; i < 2048; i++) {
+    for(int i = 0; i < output_shape; i++) {
     	// printf("%d, %f, %lf\n", i, result[i], tmp2[i]);
     	// assert(abs(result[i] - (float)tmp2[i]) < 1e-4);
     	if (abs(result[i] - (float)tmp2[i]) > 1e-3) {
